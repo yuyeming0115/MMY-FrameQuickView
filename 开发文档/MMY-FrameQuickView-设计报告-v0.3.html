@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MMY-FrameQuickView 设计报告 v0.3（定稿）</title>
+<style>
+  :root{
+    --page-bg:#F5F4F0; --page-card:#FFFFFF; --ink:#2B2B2B; --ink-sub:#6B7280;
+    --line:#E3E0D8; --accent:#B8962E;
+    --app-bg:#1E2023; --app-card:#2A2E33; --app-border:#3A3F46;
+    --app-gold:#D4AF37; --app-text:#E8E4D9; --app-sub:#96A1AD; --app-red:#C74444;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{background:var(--page-bg); color:var(--ink); font-family:"Microsoft YaHei","PingFang SC",sans-serif; font-size:15px; line-height:1.7; padding:32px 16px;}
+  .wrap{max-width:1080px; margin:0 auto;}
+  header.report{background:linear-gradient(135deg,#23262b,#3a3f46); color:var(--app-text); border-radius:14px; padding:28px 32px; margin-bottom:24px; border-left:6px solid var(--app-gold);}
+  header.report h1{font-size:26px; letter-spacing:1px;}
+  header.report .meta{color:var(--app-sub); margin-top:6px; font-size:14px;}
+  header.report .tag{display:inline-block; background:var(--app-gold); color:#1E2023; font-weight:700; font-size:12px; border-radius:4px; padding:1px 8px; margin-left:8px; vertical-align:middle;}
+  section{background:var(--page-card); border:1px solid var(--line); border-radius:12px; padding:24px 28px; margin-bottom:20px;}
+  h2{font-size:19px; margin-bottom:14px; padding-left:12px; border-left:4px solid var(--accent);}
+  h3{font-size:16px; margin:18px 0 8px;}
+  table{width:100%; border-collapse:collapse; margin:10px 0; font-size:14px;}
+  th,td{border:1px solid var(--line); padding:8px 12px; text-align:left; vertical-align:top;}
+  th{background:#FAF8F3;}
+  code,pre{font-family:Consolas,"Courier New",monospace; font-size:13px;}
+  pre{background:#23262b; color:#E8E4D9; border-radius:8px; padding:14px 16px; overflow:auto;}
+  .ok{color:#2E7D32; font-weight:700;} .no{color:var(--app-red); font-weight:700;}
+  .note{background:#FBF6E7; border:1px solid #E8D9A0; border-radius:8px; padding:10px 14px; margin:10px 0; font-size:14px;}
+  .confirmed{background:#EEF6EE; border:1px solid #BCD8BC; border-radius:8px; padding:10px 14px; margin:10px 0; font-size:14px;}
+  .strike{text-decoration:line-through; color:var(--ink-sub);}
+
+  /* ===== App Mockup (dark theme) ===== */
+  .mock{background:var(--app-bg); border-radius:12px; border:1px solid var(--app-border); color:var(--app-text); font-size:13px; overflow:hidden; box-shadow:0 8px 30px rgba(0,0,0,.25); margin-top:8px;}
+  .mock .titlebar{display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid var(--app-border); background:#23262a;}
+  .mock .titlebar .dot{width:10px;height:10px;border-radius:50%;}
+  .mock .titlebar .name{font-weight:700; letter-spacing:.5px; font-size:14px;}
+  .mock .tpl{margin-left:auto; display:flex; gap:8px; align-items:center;}
+  .mock .tpl select, .mock .tpl button{background:var(--app-card); color:var(--app-text); border:1px solid var(--app-border); border-radius:6px; padding:3px 10px; font-size:13px;}
+  .mock .dropbar{padding:12px 14px; border-bottom:1px solid var(--app-border);}
+  .mock .drop{border:1.5px dashed var(--app-border); border-radius:8px; padding:10px; text-align:center; color:var(--app-sub); background:rgba(255,255,255,.02);}
+  .mock .body{display:flex; min-height:360px;}
+  .mock .side{width:196px; flex:none; border-right:1px solid var(--app-border); display:flex; flex-direction:column;}
+  .mock .side .search{margin:10px; background:var(--app-card); border:1px solid var(--app-border); border-radius:6px; padding:5px 10px; color:var(--app-sub); font-size:12px;}
+  .mock .side .list{flex:1; overflow:hidden; padding:0 8px 10px; display:flex; flex-direction:column; gap:2px;}
+  .mock .side .grp{padding:5px 10px 2px; color:var(--app-sub); font-size:11px; letter-spacing:.5px;}
+  .mock .side .it{padding:5px 10px 5px 20px; border-radius:6px; color:var(--app-text); font-size:12.5px; display:flex; align-items:center; gap:6px; white-space:nowrap;}
+  .mock .side .it .part{color:var(--app-gold);}
+  .mock .side .it.sel{background:rgba(212,175,55,.12); box-shadow:0 0 0 1px var(--app-gold) inset;}
+  .mock .side .it .rdot{width:7px;height:7px;border-radius:50%;background:var(--app-red);flex:none;margin-left:auto;}
+  .mock .side .cnt{padding:6px 12px; color:var(--app-sub); font-size:11px; border-top:1px solid var(--app-border);}
+  .mock .right{flex:1; display:flex; flex-direction:column; min-width:0;}
+  .mock .btnrows{padding:10px 14px; border-bottom:1px solid var(--app-border); display:flex; flex-direction:column; gap:8px;}
+  .mock .brow{display:flex; align-items:center; gap:6px; flex-wrap:wrap;}
+  .mock .brow .lbl{color:var(--app-sub); width:34px; flex:none;}
+  .mock .b{background:var(--app-card); border:1px solid var(--app-border); color:var(--app-text); border-radius:6px; padding:4px 12px; font-size:13px;}
+  .mock .b.sel{border-color:var(--app-gold); color:var(--app-gold); box-shadow:0 0 0 1px var(--app-gold) inset;}
+  .mock .b.miss{background:rgba(199,68,68,.18); border-color:var(--app-red); color:#E79A9A;}
+  .mock .b.layer{border-style:dashed;}
+  .mock .b.layer.on{border-style:solid; border-color:var(--app-gold); color:var(--app-gold);}
+  .mock .main{display:flex; flex:1;}
+  .mock .a{flex:1.25; padding:12px; border-right:1px solid var(--app-border);}
+  .mock .bpane{flex:1; padding:12px; display:flex; flex-direction:column; align-items:center; gap:10px;}
+  .mock .pane-title{color:var(--app-sub); font-size:12px; margin-bottom:8px; letter-spacing:1px;}
+  .mock .grid{display:grid; grid-template-columns:repeat(4,1fr); gap:10px;}
+  .mock .cell{background:var(--app-card); border-radius:8px; aspect-ratio:1/1.1; display:flex; align-items:center; justify-content:center; position:relative;}
+  .mock .cell .fno{position:absolute; bottom:4px; right:8px; font-size:10px; color:var(--app-sub);}
+  /* layered sprite: shadow ellipse under body */
+  .lsprite{position:relative; width:44px; height:56px;}
+  .lsprite .sh{position:absolute; bottom:0; left:50%; transform:translateX(-50%); width:40px; height:12px; background:rgba(0,0,0,.55); border-radius:50%;}
+  .lsprite .bd{position:absolute; bottom:4px; left:50%; transform:translateX(-50%); width:28px; height:44px; background:linear-gradient(180deg,#c9b27a,#8a7648); border-radius:50% 50% 42% 42% / 38% 38% 55% 55%;}
+  .lsprite .bd::before{content:""; position:absolute; top:-8px; left:50%; transform:translateX(-50%); width:16px; height:16px; background:#d8c493; border-radius:50%;}
+  .lsprite.f2 .bd{transform:translateX(-50%) rotate(-4deg);}
+  .lsprite.f3 .bd{transform:translateX(-50%) rotate(3deg);}
+  .lsprite.f4 .bd{transform:translateX(-50%) rotate(-2deg);}
+  .lsprite.big{width:72px; height:92px;}
+  .lsprite.big .sh{width:64px; height:18px;}
+  .lsprite.big .bd{width:46px; height:72px;}
+  .lsprite.big .bd::before{width:26px;height:26px;top:-12px;}
+  .mock .stage{background:var(--app-card); border-radius:10px; width:100%; flex:1; min-height:150px; display:flex; align-items:center; justify-content:center; position:relative;}
+  .mock .stage.checker{background:repeating-conic-gradient(#3A3F46 0% 25%, #2A2E33 0% 50%) 0 0/18px 18px;}
+  .mock .stage .badge{position:absolute; top:8px; left:10px; font-size:11px; color:var(--app-gold); background:rgba(30,32,35,.75); padding:1px 6px; border-radius:4px;}
+  .mock .stage .bgtoggle{position:absolute; top:8px; right:10px; font-size:11px; color:var(--app-sub); background:rgba(30,32,35,.75); border:1px solid var(--app-border); padding:1px 8px; border-radius:4px;}
+  .mock .ctrl{display:flex; align-items:center; gap:10px; width:100%; justify-content:center; color:var(--app-text);}
+  .mock .ctrl .cbtn{background:var(--app-card); border:1px solid var(--app-border); border-radius:6px; width:32px; height:28px; display:flex; align-items:center; justify-content:center; color:var(--app-gold);}
+  .mock .ctrl .slider{flex:1; max-width:150px; height:4px; background:var(--app-border); border-radius:2px; position:relative;}
+  .mock .ctrl .slider::after{content:""; position:absolute; left:55%; top:50%; transform:translate(-50%,-50%); width:12px; height:12px; background:var(--app-gold); border-radius:50%;}
+  .mock .statusbar{border-top:1px solid var(--app-border); padding:8px 14px; color:var(--app-sub); font-size:12px; display:flex; gap:18px; flex-wrap:wrap;}
+  .mock .statusbar .warn{color:#E79A9A;}
+  .mock .statusbar .good{color:#8FBC8F;}
+  .legend{display:flex; gap:16px; flex-wrap:wrap; margin-top:10px; font-size:13px; color:var(--ink-sub);}
+  .legend .chip{display:inline-block; width:14px; height:14px; border-radius:4px; vertical-align:-2px; margin-right:5px;}
+  footer{text-align:center; color:var(--ink-sub); font-size:13px; padding:12px 0 24px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="report">
+  <h1>MMY-FrameQuickView 设计报告<span class="tag">v0.3 定稿</span></h1>
+  <div class="meta">序列帧极速查看器 · 查漏补缺 + GIF 动画检验 + 同ID叠层配套校验 · 2026-08-18 归档</div>
+</header>
+
+<section>
+  <h2>一、确认结论汇总（7 项全部闭环）</h2>
+  <div class="confirmed">
+    ✅ PySide6 + Pillow + numpy（Python 3.13 managed）· ✅ 层级 方向/动作/帧 · ✅ 帧命名 <code>0001.png</code>（跨动作连续编号）<br>
+    ✅ 文件夹模式 <code>{id}(_{part})?</code>（纯 ID 兼容）· ✅ 左栏可搜索部件列表（按 ID 分组）<br>
+    ✅ B 区背景：默认透明 + 可选棋盘格 · ✅ <b>同 ID 部件叠层显示（shadow 最底层）</b> · ✅ 布局定稿
+  </div>
+  <div class="note"><b>范围界定</b>：叠层仅限<b>同 ID</b> 部件（如 <code>50103101_shadow</code> + <code>50103101_weapon</code>），用途是检查资源是否配套正确；<b>不做</b>跨 ID 自由搭配组合。</div>
+</section>
+
+<section>
+  <h2>二、UI Mockup v0.3（定稿）</h2>
+  <div class="mock">
+    <div class="titlebar">
+      <span class="dot" style="background:#C74444"></span>
+      <span class="dot" style="background:#D4AF37"></span>
+      <span class="dot" style="background:#5a8a5a"></span>
+      <span class="name">MMY-FrameQuickView</span>
+      <div class="tpl">模板
+        <select><option>天命装</option><option>昆仑（轩辕剑）</option></select>
+        <button>✎ 编辑</button><button>＋ 新建</button>
+      </div>
+    </div>
+    <div class="dropbar">
+      <div class="drop">⬇ 拖入部件文件夹 / 父级目录（自动扫描一级子文件夹）&nbsp;·&nbsp;当前: E:\XYJProject\美术资源\动画序列帧\角色输出图</div>
+    </div>
+    <div class="body">
+      <div class="side">
+        <div class="search">🔍 过滤部件…</div>
+        <div class="list">
+          <div class="grp">50103101</div>
+          <div class="it sel"><span class="part">shadow</span><span class="rdot"></span></div>
+          <div class="it"><span class="part">weapon</span></div>
+          <div class="grp">505026</div>
+          <div class="it">（整体资源）</div>
+          <div class="grp">505027</div>
+          <div class="it">（整体资源）</div>
+          <div class="grp">50104101</div>
+          <div class="it"><span class="part">shadow</span></div>
+          <div class="it"><span class="part">wings</span></div>
+        </div>
+        <div class="cnt">共 16 项 · 按 ID 分组 · 1 项缺漏</div>
+      </div>
+      <div class="right">
+        <div class="btnrows">
+          <div class="brow"><span class="lbl">方向</span>
+            <span class="b sel">E</span><span class="b">N</span><span class="b">NW</span><span class="b miss">S 缺</span><span class="b">SE</span>
+          </div>
+          <div class="brow"><span class="lbl">动作</span>
+            <span class="b">idle</span><span class="b sel">run</span><span class="b">attack</span><span class="b">skill</span><span class="b miss">hurt 缺</span><span class="b">block</span><span class="b">dead</span><span class="b">ride_idle</span><span class="b">ride_run</span>
+          </div>
+          <div class="brow"><span class="lbl">叠层</span>
+            <span class="b layer on">✓ shadow（最底层）</span><span class="b layer on">✓ weapon</span>
+            <span style="color:var(--app-sub); font-size:12px;">← 同 ID 部件，可勾选</span>
+          </div>
+        </div>
+        <div class="main">
+          <div class="a">
+            <div class="pane-title">A · 序列帧网格（叠层合成 · 100% · 包围盒裁剪）</div>
+            <div class="grid">
+              <div class="cell"><div class="lsprite"><div class="sh"></div><div class="bd"></div></div><span class="fno">0009</span></div>
+              <div class="cell"><div class="lsprite f2"><div class="sh"></div><div class="bd"></div></div><span class="fno">0010</span></div>
+              <div class="cell"><div class="lsprite f3"><div class="sh"></div><div class="bd"></div></div><span class="fno">0011</span></div>
+              <div class="cell"><div class="lsprite f4"><div class="sh"></div><div class="bd"></div></div><span class="fno">0012</span></div>
+              <div class="cell"><div class="lsprite"><div class="sh"></div><div class="bd"></div></div><span class="fno">0013</span></div>
+              <div class="cell"><div class="lsprite f2"><div class="sh"></div><div class="bd"></div></div><span class="fno">0014</span></div>
+              <div class="cell"><div class="lsprite f3"><div class="sh"></div><div class="bd"></div></div><span class="fno">0015</span></div>
+              <div class="cell"><div class="lsprite f4"><div class="sh"></div><div class="bd"></div></div><span class="fno">0016</span></div>
+            </div>
+          </div>
+          <div class="bpane">
+            <div class="pane-title">B · GIF 动画预览（并集 bbox · 防抖动）</div>
+            <div class="stage checker">
+              <span class="badge">run / E · 12 FPS · shadow+weapon</span>
+              <span class="bgtoggle">背景: 棋盘格 ▾</span>
+              <div class="lsprite big f3"><div class="sh"></div><div class="bd"></div></div>
+            </div>
+            <div class="ctrl">
+              <span class="cbtn">⏮</span><span class="cbtn">▶</span><span class="cbtn">⏭</span>
+              <span style="color:var(--app-sub)">FPS</span><span class="slider"></span><span>12</span>
+            </div>
+            <div class="ctrl" style="color:var(--app-sub); font-size:12px;">帧 0009–0016 · 循环 ⟳ · 点击 A 区帧跳转</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="statusbar">
+      <span>8 帧（0009–0016）</span><span>原图 512×512 → 裁剪 128×200</span>
+      <span class="good">✅ 区间内帧号连续</span>
+      <span class="good">✅ shadow 配套完整</span>
+      <span class="warn">⚠ 缺失: 方向 S · 动作 hurt</span>
+    </div>
+  </div>
+  <div class="legend">
+    <span><span class="chip" style="background:#2A2E33; border:1px solid #3A3F46"></span>普通按钮</span>
+    <span><span class="chip" style="background:#2A2E33; border:2px solid #D4AF37"></span>选中（金）</span>
+    <span><span class="chip" style="background:rgba(199,68,68,.35); border:1px solid #C74444"></span>缺失（暗红）</span>
+    <span><span class="chip" style="background:#C74444; border-radius:50%"></span>列表缺漏红点</span>
+    <span>B 区示意当前为「棋盘格底」状态，可切回透明</span>
+  </div>
+</section>
+
+<section>
+  <h2>三、同 ID 叠层设计（v0.3 核心新增）</h2>
+  <table>
+    <tr><th>要点</th><th>规则</th></tr>
+    <tr><td>触发条件</td><td>选中部件的同 ID 组内存在其他部件 → 按钮区出现「叠层」chips 行，默认全勾选</td></tr>
+    <tr><td>叠放顺序</td><td>模板 <code>layer_order</code> 定义，数组前 = 越底层；<b>shadow 固定最底层</b></td></tr>
+    <tr><td>对齐方式</td><td>参与层共享同一并集 bbox 窗口，各层按同一窗口裁剪后叠加，不错位</td></tr>
+    <tr><td>作用范围</td><td>A 区网格与 B 区动画同步叠层；仅限同 ID，不做跨 ID 自由组合</td></tr>
+    <tr><td>配套校验</td><td>同 ID 各部件 方向×动作 矩阵交集对比：主体有的动作 shadow 缺 → 状态栏标「配套异常」</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>四、规则模板（v0.3 定稿）</h2>
+  <pre>{
+  "name": "天命装",
+  "folder_pattern": "{id}(_{part})?",
+  "parts": ["hair","body","weapon","wings","ride_front","ride_back","shadow","fills"],
+  "directions": ["E","N","NW","S","SE"],
+  "actions": ["idle","run","attack","skill","hurt","block","dead","ride_idle","ride_run"],
+  "hierarchy": ["direction","action"],
+  "layer_order": ["shadow","ride_back","body","hair","weapon","wings","ride_front","fills"],
+  "frame_pattern": "^(\\d{4})\\.png$",
+  "extensions": [".png",".webp"]
+}</pre>
+</section>
+
+<section>
+  <h2>五、缺漏检测逻辑</h2>
+  <table>
+    <tr><th>层</th><th>检测内容</th><th>呈现</th></tr>
+    <tr><td>结构层</td><td>模板 方向×动作 笛卡尔积 vs 实际目录</td><td>按钮暗红 + 列表红点</td></tr>
+    <tr><td>帧号层</td><td>动作内 min→max 区间连续（<span class="no">不</span>要求从 0001 开始）；可选：同方向各动作首尾拼接查整体缺段</td><td>状态栏</td></tr>
+    <tr><td>配套层</td><td>同 ID 部件 方向×动作 矩阵交集对比</td><td>状态栏「配套异常」标记</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>六、里程碑</h2>
+  <table>
+    <tr><th>阶段</th><th>内容</th><th>状态</th></tr>
+    <tr><td>M0</td><td>方案评审</td><td class="ok">✅ v0.3 定稿</td></tr>
+    <tr><td>M1</td><td>骨架 PR：拖拽 + 模板加载 + 左栏分组列表 + 按钮矩阵 + 缺漏标记</td><td>🚧 进行中</td></tr>
+    <tr><td>M2</td><td>A 区网格 + bbox 裁剪 + 同ID叠层合成</td><td>待启动</td></tr>
+    <tr><td>M3</td><td>B 区动画 + FPS/步进 + 棋盘格背景</td><td>待启动</td></tr>
+    <tr><td>M4</td><td>模板编辑器 + 打包发布</td><td>待启动</td></tr>
+  </table>
+</section>
+
+<footer>MMY-FrameQuickView · 设计报告 v0.3（定稿）· 2026-08-18 · 本地归档</footer>
+</div>
+</body>
+</html>
