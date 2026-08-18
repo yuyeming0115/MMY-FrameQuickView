@@ -1,0 +1,11 @@
+{
+  "name": "天命装",
+  "folder_pattern": "{id}(_{part})?",
+  "parts": ["hair", "body", "weapon", "wings", "ride_front", "ride_back", "shadow", "fills"],
+  "directions": ["E", "N", "NW", "S", "SE"],
+  "actions": ["idle", "run", "attack", "skill", "hurt", "block", "dead", "ride_idle", "ride_run"],
+  "hierarchy": ["direction", "action"],
+  "layer_order": ["shadow", "ride_back", "body", "hair", "weapon", "wings", "ride_front", "fills"],
+  "frame_pattern": "^(\\d{4})\\.png$",
+  "extensions": [".png", ".webp"]
+}
