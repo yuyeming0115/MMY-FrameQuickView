@@ -13,9 +13,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from PySide6.QtWidgets import QApplication            # noqa: E402
+from PySide6.QtCore import QEvent, Qt                       # noqa: E402
+from PySide6.QtGui import QKeyEvent                         # noqa: E402
+from PySide6.QtWidgets import (
+    QApplication, QComboBox, QLineEdit,                     # noqa: E402
+)
 
-from src.app import MainWindow                        # noqa: E402
+from src.app import MainWindow                              # noqa: E402
 
 REAL_ROOT = Path(r"E:\XYJProject\美术资源\动画序列帧\角色输出图")
 
@@ -75,6 +79,69 @@ def main() -> int:
         _wait_workers(win)
         print(f"[M3联动] 点击 A 区第 0 帧 → B 区 index={win.anim_view._index}")
         assert win.anim_view._index == 0, "A/B 联动跳转失败"
+
+        # ---- M5：方向切换保持动作 ----
+        d0, a0 = win.matrix.current()
+        other = [d for d in win._tpl.directions if d != d0]
+        if other:
+            win._on_direction_selected(other[0])
+            _wait_workers(win)
+            d1, a1 = win.matrix.current()
+            print(f"[M5保持] 方向 {d0}→{other[0]}: 动作 {a0}→{a1}")
+            # 仅当 a0 在新方向下存在时断言保持（缺失时由兜底逻辑接管）
+            if a0 and a0 in part.available_actions(other[0]):
+                assert a1 == a0, f"切换方向后动作未保持: {a1} != {a0}"
+            # 复位到 a0（兜底后可能已变，以当前为准）
+            _, cur_a = win.matrix.current()
+            if cur_a:
+                win._on_action_selected(cur_a)
+
+        # ---- M5：键盘导航（左右切方向 / 上下切动作，模板循环） ----
+        full_part = next(
+            (p for p in win._result.parts
+             if set(p.available_directions()) == set(win._tpl.directions)),
+            None,
+        )
+        if full_part is not None:
+            win._on_part_selected(full_part)
+            _wait_workers(win)
+            dirs, acts = win._tpl.directions, win._tpl.actions
+            d_before, a_before = win.matrix.current()
+
+            # 模拟用户点击过按钮：焦点落在方向按钮上（offscreen 默认焦点在模板下拉框，
+            # 会被输入控件保护逻辑拦截，故显式设焦点）
+            btn = win.matrix.dir_row._buttons.get(d_before)
+            if btn is not None:
+                btn.setFocus()
+            assert not isinstance(win.focusWidget(), (QLineEdit, QComboBox)), \
+                "焦点未落在按钮上，键盘导航被拦截"
+
+            # → 右方向键：方向前进一格（模板循环）
+            win.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key_Right, Qt.NoModifier))
+            _wait_workers(win)
+            d_right, a_after = win.matrix.current()
+            exp_d = dirs[(dirs.index(d_before) + 1) % len(dirs)]
+            print(f"[M5键盘→] 方向 {d_before}→{d_right}（期望 {exp_d}）动作保持 {a_after}")
+            assert d_right == exp_d, f"右方向键切换失败: {d_right} != {exp_d}"
+            assert a_after == a_before, f"键盘切方向后动作未保持: {a_after} != {a_before}"
+
+            # ↑ 上方向键：动作后退一格（模板循环）
+            win.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key_Up, Qt.NoModifier))
+            _wait_workers(win)
+            _, a_up = win.matrix.current()
+            exp_a = acts[(acts.index(a_before) - 1) % len(acts)]
+            print(f"[M5键盘↑] 动作 {a_before}→{a_up}（期望 {exp_a}）")
+            assert a_up == exp_a, f"上方向键切换失败: {a_up} != {exp_a}"
+
+            # ← 左方向键：方向后退一格
+            win.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key_Left, Qt.NoModifier))
+            _wait_workers(win)
+            d_left, _ = win.matrix.current()
+            exp_dl = dirs[(dirs.index(d_right) - 1) % len(dirs)]
+            print(f"[M5键盘←] 方向 {d_right}→{d_left}（期望 {exp_dl}）")
+            assert d_left == exp_dl, f"左方向键切换失败: {d_left} != {exp_dl}"
+        else:
+            print("[跳过] 未找到覆盖全部方向的部件，键盘导航断言跳过")
     else:
         print(f"[跳过] 真实目录不存在: {REAL_ROOT}")
 
