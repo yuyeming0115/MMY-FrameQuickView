@@ -27,9 +27,10 @@ from PySide6.QtCore import Qt, QTimer, Signal, QPointF, QRectF
 from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QSlider,
-    QVBoxLayout, QWidget,
+    QStackedLayout, QVBoxLayout, QWidget,
 )
 
+from .hover_scroll import enable_hover_scroll
 from .worker import DecodeWorker
 
 
@@ -316,53 +317,50 @@ class AnimView(QFrame):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(4)
 
-        # ---- 上半：左按钮矩阵 | 右画布 ----
-        body = QHBoxLayout()
-        body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(6)
+        # ---- 上半：标题行 + 叠加层（canvas 铺底，按钮矩阵浮于其上）----
+        self._title = QLabel("B · GIF 动画预览（并集 bbox · 防抖动）")
+        self._title.setStyleSheet("color: #96A1AD; font-size: 12px; letter-spacing: 1px;")
+        outer.addWidget(self._title)
 
-        # 左侧：方向/动作按钮矩阵（注入），用 QScrollArea 包裹防按钮溢出容器被切
+        # 叠加容器：QStackedLayout(StackAll) 让 canvas 铺满，按钮矩阵浮于其左上
+        stack_host = QWidget()
+        stack_host.setStyleSheet("background: transparent;")
+        stack = QStackedLayout(stack_host)
+        stack.setStackingMode(QStackedLayout.StackAll)
+
+        # 底层：canvas 铺满整个区域
+        self._canvas = _AnimCanvas()
+        self._canvas.direction_overlay_clicked.connect(self.direction_overlay_clicked)
+        stack.addWidget(self._canvas)
+
+        # 上层：按钮矩阵容器（透明底，靠左悬浮）
         self._matrix_container = QFrame()
+        self._matrix_container.setAutoFillBackground(False)
+        self._matrix_container.setStyleSheet(
+            "QFrame, QWidget { background: transparent; border: none; }"
+        )
         ml = QVBoxLayout(self._matrix_container)
-        # 左 8px padding：让按钮左边框与 A/B 区 splitter 手柄（4px 灰条）拉开距离，
-        # 避免视觉上按钮"被 splitter 切掉左边"的错觉。
-        ml.setContentsMargins(8, 0, 0, 0)
+        ml.setContentsMargins(8, 4, 0, 0)
         ml.setSpacing(0)
         self._matrix_container.setFixedWidth(LEFT_PANEL_WIDTH)
-        self._matrix_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        self._matrix_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Maximum)
 
         self._matrix_scroll = _MatrixScrollArea()
-        # widgetResizable=True：QScrollArea 把 widget.resize 到 viewport 大小，
-        # 加上 _MatrixScrollArea.resizeEvent 主动 setFixedWidth 双保险。
-        # 高度若超 viewport，垂直滚动条自然出现。
         self._matrix_scroll.setWidgetResizable(True)
         self._matrix_scroll.setFrameShape(QFrame.NoFrame)
         self._matrix_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._matrix_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        enable_hover_scroll(self._matrix_scroll)
         self._matrix_scroll.setStyleSheet(
-            "QScrollArea { background: transparent; border: none; }"
-            "QScrollArea > QWidget > QWidget { background: transparent; }"
+            "QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }"
         )
+        self._matrix_scroll.viewport().setAutoFillBackground(False)
         ml.addWidget(self._matrix_scroll)
-        body.addWidget(self._matrix_container)
+        stack.addWidget(self._matrix_container)
+        # 按钮矩阵在上层，透出下层 canvas
+        self._matrix_container.raise_()
 
-        # 右侧：标题 + canvas（不再含控制栏）
-        right = QWidget()
-        rl = QVBoxLayout(right)
-        rl.setContentsMargins(0, 0, 0, 0)
-        rl.setSpacing(4)
-
-        self._title = QLabel("B · GIF 动画预览（并集 bbox · 防抖动）")
-        self._title.setStyleSheet("color: #96A1AD; font-size: 12px; letter-spacing: 1px;")
-        rl.addWidget(self._title)
-
-        self._canvas = _AnimCanvas()
-        # canvas 的显向信号向上转发给 app
-        self._canvas.direction_overlay_clicked.connect(self.direction_overlay_clicked)
-        rl.addWidget(self._canvas, 1)
-
-        body.addWidget(right, 1)
-        outer.addLayout(body, 1)
+        outer.addWidget(stack_host, 1)
 
         # ---- 底部整行：控制条 ----
         bar = QHBoxLayout()

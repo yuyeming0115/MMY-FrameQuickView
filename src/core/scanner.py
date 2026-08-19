@@ -38,6 +38,7 @@ class PartData:
     part: str | None                       # None = 纯ID整体资源
     matrix: dict[str, dict[str, ActionData]] = field(default_factory=dict)
     character_type: str = ""               # protagonist / non_protagonist（归一化后）
+    effective_type: str = ""               # 查漏实际使用的类型（覆盖 wings/mount/npc/空）
     missing_directions: list[str] = field(default_factory=list)
     # 方向存在但「约定动作」缺失: {direction: [action, ...]}（按角色类型+方向基准）
     missing_actions: dict[str, list[str]] = field(default_factory=dict)
@@ -71,6 +72,7 @@ class IdGroup:
     pairing_issues: list[str] = field(default_factory=list)
     # 按角色类型+方向基准的缺漏（组视图按钮矩阵/状态栏用）
     character_type: str = ""
+    effective_type: str = ""               # 查漏实际使用的类型（覆盖 wings/mount/npc）
     missing_directions: list[str] = field(default_factory=list)
     missing_actions: dict[str, list[str]] = field(default_factory=dict)
 
@@ -151,17 +153,37 @@ def scan_part(folder: Path, tpl: Template, char_type_of=None) -> PartData | None
 
     missing_directions = [d for d in tpl.directions if d not in matrix]
     missing_actions: dict[str, list[str]] = {}
-    # 按「角色类型 × 方向」基准查缺：主角 NW/SE 含 ride_*，E/N/S 含 attack；
-    # 其他类型 NW/SE 不含 ride_*，E/N/S 仅 idle/run。
+    # shadow/fills 是配套部件（影子/补丁），动作跟随主体，不单独查漏。
+    # 翅膀部件用 wings 规则；坐骑部件用 mount 规则；其他按角色类型。
+    # NPC 兜底：匹配表未标类型（default non_protagonist）且实际无任何
+    # attack/skill/hurt/block/dead/ride_* 动作 → 按 npc 规则（5方向仅 idle/run）。
+    if part in ("shadow", "fills"):
+        part_type = ""  # 空 → expected_actions 返回 [] → 不查漏
+    elif part == "wings":
+        part_type = "wings"
+    elif part in ("ride_front", "ride_back"):
+        part_type = "mount"
+    else:
+        part_type = char_type
+        if char_type == tpl.default_character_type:
+            # 收集该部件实际拥有的所有动作
+            owned_actions: set[str] = set()
+            for col in matrix.values():
+                owned_actions.update(col.keys())
+            combat = {"attack", "skill", "hurt", "block", "dead"}
+            ride = {"ride_idle", "ride_run"}
+            # 无战斗动作也无坐骑动作 → NPC（只有 idle/run）
+            if not (owned_actions & combat) and not (owned_actions & ride):
+                part_type = "npc"
     for d in matrix:
-        expected = tpl.expected_actions(char_type, d)
+        expected = tpl.expected_actions(part_type, d)
         miss = [a for a in expected if a not in matrix[d]]
         if miss:
             missing_actions[d] = miss
 
     return PartData(
         folder=folder, res_id=res_id, part=part, matrix=matrix,
-        character_type=char_type,
+        character_type=char_type, effective_type=part_type,
         missing_directions=missing_directions, missing_actions=missing_actions,
     )
 
@@ -247,6 +269,7 @@ def _group_parts(parts: list[PartData], tpl: Template, char_type_of=None) -> lis
         char_type = tpl.resolve_char_type(char_type_of(res_id) if char_type_of else None)
         grp = IdGroup(res_id=res_id, parts=members, character_type=char_type)
         # 组级方向/动作缺漏：以「组内所有部件并集拥有」为参照，对照类型×方向基准
+        # 部位类型覆盖：组内所有部件都是 wings → wings 规则；都是 ride_* → mount 规则
         owned_dirs: set[str] = set()
         owned_per_dir: dict[str, set[str]] = {}
         for p in members:
@@ -254,11 +277,30 @@ def _group_parts(parts: list[PartData], tpl: Template, char_type_of=None) -> lis
                 owned_dirs.add(d)
                 owned_per_dir.setdefault(d, set()).update(col.keys())
         grp.missing_directions = [d for d in tpl.directions if d not in owned_dirs]
+        # 判定组级查漏类型：排除 shadow/fills（配套部件，不参与类型判定）
+        # 非 shadow/fills 部件全 wings → wings；全 ride_* → mount；
+        # 否则用 char_type，但若 char_type=default 且组内无任何战斗/坐骑动作 → NPC 兜底。
+        type_parts = [p.part for p in members if p.part not in ("shadow", "fills", None)]
+        if type_parts and all(pt == "wings" for pt in type_parts):
+            group_type = "wings"
+        elif type_parts and all(pt in ("ride_front", "ride_back") for pt in type_parts):
+            group_type = "mount"
+        else:
+            group_type = char_type
+            if char_type == tpl.default_character_type:
+                owned_all: set[str] = set()
+                for acts in owned_per_dir.values():
+                    owned_all |= acts
+                combat = {"attack", "skill", "hurt", "block", "dead"}
+                ride = {"ride_idle", "ride_run"}
+                if not (owned_all & combat) and not (owned_all & ride):
+                    group_type = "npc"
+        grp.effective_type = group_type
         grp.missing_actions = {}
         for d in tpl.directions:
             if d in grp.missing_directions:
                 continue
-            expected = tpl.expected_actions(char_type, d)
+            expected = tpl.expected_actions(group_type, d)
             miss = [a for a in expected if a not in owned_per_dir.get(d, set())]
             if miss:
                 grp.missing_actions[d] = miss

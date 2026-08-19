@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QFileSystemWatcher, QSettings, Qt
+from PySide6.QtCore import QEvent, QFileSystemWatcher, QSettings, Qt
 from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
     QMessageBox, QPushButton, QSplitter, QVBoxLayout, QWidget,
@@ -71,17 +71,22 @@ class MainWindow(QMainWindow):
         self._settings = QSettings("MMY", "FrameQuickView")
         self._last_folder: Path | None = None      # 最近一次拖入的目录
         self._last_map_file: Path | None = None    # 最近一次成功加载的匹配表
-        # 重启兜底：上次的匹配表如果还存在，自动恢复；否则下次拖入时会重新 discover。
+        # 重启兜底：上次的匹配表/拖入目录如果还存在，自动恢复
         saved = self._load_saved_map_path()
         if saved is not None and saved.exists():
             self._last_map_file = saved
+        saved_folder = self._settings.value("last/folder", "")
+        if saved_folder and Path(saved_folder).exists():
+            self._last_folder = Path(saved_folder)
 
         self._build_ui()
-        self._build_menu()
         if self._tpl:
             self.matrix.set_template(self._tpl)
             self.anim_view.set_available_dirs(set(self._tpl.directions))
         self.statusBar().showMessage("就绪 · 拖入文件夹开始")
+        # 重启恢复：自动重新扫描上次拖入的目录
+        if self._last_folder is not None and self._tpl is not None:
+            self._on_folder_dropped(self._last_folder)
 
     # ---------------- UI ----------------
     def _build_ui(self) -> None:
@@ -90,12 +95,14 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
 
-        # 顶栏：标题 + 模板切换 + 编辑/新建（M4）
+        # 顶栏：拖拽区（含 ⚙ 匹配表菜单） + 模板切换 + 编辑/新建（一行）
         top = QHBoxLayout()
-        title = QLabel("MMY-FrameQuickView")
-        title.setStyleSheet("font-weight: 700; font-size: 16px; color: #E8E4D9;")
-        top.addWidget(title)
-        top.addStretch(1)
+        self.drop = DropZone()
+        self.drop.folder_dropped.connect(self._on_folder_dropped)
+        self.drop.reload_namemap_requested.connect(self._reload_namemap)
+        self.drop.pick_namemap_requested.connect(self._pick_map_file)
+        top.addWidget(self.drop, 1)  # 占满左侧
+        top.addSpacing(8)
         top.addWidget(QLabel("模板"))
         self.tpl_combo = QComboBox()
         self.tpl_combo.addItems([t.name for t in self._templates])
@@ -109,13 +116,9 @@ class MainWindow(QMainWindow):
         top.addWidget(self.new_btn)
         root.addLayout(top)
 
-        # 拖拽区
-        self.drop = DropZone()
-        self.drop.folder_dropped.connect(self._on_folder_dropped)
-        root.addWidget(self.drop)
-
         # 主体：左栏部件列表 | 右侧（按钮矩阵 + A/B 双区）
-        splitter = QSplitter()
+        self._splitter = QSplitter()
+        splitter = self._splitter
         splitter.setChildrenCollapsible(False)    # 任何一侧不能被拖到 0，避免布局抖动
         splitter.setHandleWidth(4)                # 细手柄，降低视觉权重
         self.part_list = PartList()
@@ -130,7 +133,8 @@ class MainWindow(QMainWindow):
         right_layout.setContentsMargins(8, 0, 0, 0)
         right_layout.setSpacing(8)
 
-        panes = QSplitter()
+        self._panes = QSplitter()
+        panes = self._panes
         panes.setChildrenCollapsible(False)       # A/B 区都不能折叠
         panes.setHandleWidth(4)
         self.grid_view = GridView()
@@ -152,11 +156,19 @@ class MainWindow(QMainWindow):
         splitter.addWidget(right)
         splitter.setStretchFactor(1, 1)
         # 左栏宽度锁定（PartList.setFixedWidth），这里给一致的初始比例即可。
-        splitter.setSizes([220, 1060])
-        panes.setSizes([600, 480])
+        # 3列宽度：优先从 QSettings 恢复，否则用默认值
+        # QSettings 返回 QVariantList，需显式转 list[int]（PySide6 类型严格）
+        saved_splitter = self._settings.value("layout/splitter", None)
+        saved_panes = self._settings.value("layout/panes", None)
+        splitter.setSizes([int(x) for x in saved_splitter] if saved_splitter else [220, 1060])
+        panes.setSizes([int(x) for x in saved_panes] if saved_panes else [600, 480])
 
         root.addWidget(splitter, 1)
         self.setCentralWidget(central)
+
+        # 全窗口拖拽：central widget 接收拖放，事件过滤器统一处理
+        central.setAcceptDrops(True)
+        central.installEventFilter(self)
 
     # ---------------- 行为 ----------------
     def _on_folder_dropped(self, folder: Path) -> None:
@@ -286,13 +298,33 @@ class MainWindow(QMainWindow):
         if path:
             self._reload_namemap(Path(path))
 
-    def _build_menu(self) -> None:
-        menubar = self.menuBar()
-        file_menu = menubar.addMenu("文件")
-        act_reload = file_menu.addAction("重新加载匹配表")
-        act_reload.triggered.connect(lambda: self._reload_namemap())
-        act_pick = file_menu.addAction("选择匹配表文件…")
-        act_pick.triggered.connect(self._pick_map_file)
+    # ---------------- 全窗口拖拽 ----------------
+    def eventFilter(self, obj, event) -> bool:
+        """全窗口拖拽：任意子控件上拖入文件夹都能识别。
+
+        QScrollArea/QTreeWidget 等会自行消费 drag/drop 事件，
+        这里在 capture 阶段拦截（返回 True）并转发到 DropZone 的处理逻辑。
+        """
+        et = event.type()
+        if et == QEvent.Type.DragEnter:
+            from pathlib import Path as _P
+            md = event.mimeData()
+            if md.hasUrls():
+                for url in md.urls():
+                    if url.isLocalFile() and _P(url.toLocalFile()).is_dir():
+                        event.acceptProposedAction()
+                        return True  # 拦截，阻止子控件默认处理
+        elif et == QEvent.Type.Drop:
+            from pathlib import Path as _P
+            md = event.mimeData()
+            for url in md.urls():
+                if url.isLocalFile():
+                    p = _P(url.toLocalFile())
+                    if p.is_dir():
+                        self._on_folder_dropped(p)
+                        event.acceptProposedAction()
+                        return True
+        return super().eventFilter(obj, event)
 
     # ---------------- 选择：单部件 / 同ID组 ----------------
     def _on_part_selected(self, part: PartData) -> None:
@@ -485,3 +517,11 @@ class MainWindow(QMainWindow):
             self.matrix.set_template(self._tpl)
         if self._result and self._result.root and self._tpl:
             self._on_folder_dropped(self._result.root)
+
+    def closeEvent(self, event) -> None:
+        """关闭时保存布局宽度 + 最近拖入目录到 QSettings。"""
+        self._settings.setValue("layout/splitter", self._splitter.sizes())
+        self._settings.setValue("layout/panes", self._panes.sizes())
+        if self._last_folder is not None:
+            self._settings.setValue("last/folder", str(self._last_folder))
+        super().closeEvent(event)

@@ -14,10 +14,11 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QPoint, QSize, QRect, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
-    QFrame, QLabel, QLayout, QLayoutItem, QScrollArea, QSizePolicy,
-    QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QLayout, QLayoutItem, QPushButton,
+    QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
+from .hover_scroll import enable_hover_scroll
 from .worker import DecodeWorker
 
 
@@ -124,21 +125,90 @@ def _img_to_pixmap(img) -> QPixmap:
     return QPixmap.fromImage(qimg)
 
 
-class _FrameCell(QLabel):
+class _FrameCell(QFrame):
+    """单个帧格：图片居中 + 底部帧名标签，固定尺寸保证对齐。"""
     clicked = Signal(int)
+
+    # 样式常量（与 B 区按钮风格一致）
+    _LABEL_H = 18          # 底部标签高度
+    _PAD = 2               # 图片区域内边距
 
     def __init__(self, idx: int, parent=None):
         super().__init__(parent)
         self._idx = idx
-        self.setStyleSheet("background: transparent; border: none;")
+        self._pix: QPixmap | None = None
+        self._orig_pix: QPixmap | None = None   # 原图（未缩放），自适应模式按此重算
+        self._label_text = ""
+        self._cell_size: QSize | None = None  # 统一格子尺寸（含标签）
+        self.setStyleSheet(
+            "background: transparent; border: 1px solid transparent; border-radius: 3px;"
+        )
+        self.setMouseTracking(True)
 
     def set_pixmap(self, pix: QPixmap) -> None:
-        self.setPixmap(pix)
-        self.setFixedSize(pix.size())
+        self._pix = pix
+        self._orig_pix = pix
+
+    def set_label(self, text: str) -> None:
+        self._label_text = text
+
+    def set_cell_size(self, size: QSize) -> None:
+        """统一格子尺寸（图片区 + 标签区）。所有 cell 用同一尺寸保证对齐。"""
+        self._cell_size = size
+        self.setFixedSize(size)
+        self.update()
+
+    def rescale_pixmap(self, target_w: int, target_h: int) -> None:
+        """自适应模式：按目标图片区尺寸缩放原图（保持比例，居中）。
+
+        target_w/target_h = 图片区可用尺寸（已扣除内边距和标签高度）。
+        """
+        if self._orig_pix is None or self._orig_pix.isNull():
+            return
+        scaled = self._orig_pix.scaled(
+            target_w, target_h,
+            Qt.KeepAspectRatio, Qt.SmoothTransformation,
+        )
+        self._pix = scaled
+        self.update()
 
     def mouseReleaseEvent(self, event) -> None:
         self.clicked.emit(self._idx)
         super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event) -> None:
+        from PySide6.QtGui import QColor, QFont, QPainter
+
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+
+        rect = self.rect()
+        # 图片区（顶部，留出底部标签高度）
+        img_rect = QRect(
+            self._PAD, self._PAD,
+            rect.width() - 2 * self._PAD,
+            rect.height() - self._LABEL_H - self._PAD,
+        )
+
+        # 画图片（居中、100% 原尺寸，大于区域时按比例缩放但通常不会发生——bbox 已裁剪）
+        if self._pix is not None and not self._pix.isNull():
+            pix = self._pix
+            # 居中绘制：图片左上角对齐 img_rect 左上角
+            x = img_rect.x() + (img_rect.width() - pix.width()) // 2
+            y = img_rect.y() + (img_rect.height() - pix.height()) // 2
+            p.drawPixmap(x, y, pix)
+
+        # 底部标签
+        label_rect = QRect(
+            0, rect.height() - self._LABEL_H,
+            rect.width(), self._LABEL_H,
+        )
+        p.setPen(QColor("#96A1AD"))
+        font = QFont()
+        font.setPointSize(8)
+        p.setFont(font)
+        p.drawText(label_rect, Qt.AlignCenter, self._label_text)
 
 
 class GridView(QFrame):
@@ -149,14 +219,33 @@ class GridView(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
+        # 标题行：标题 + 右侧「原图/自适应」切换按钮
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(8)
         self._title = QLabel("A · 序列帧网格（100% 原尺寸 · 并集 bbox · 透明）")
         self._title.setStyleSheet("color: #96A1AD; font-size: 12px; letter-spacing: 1px;")
-        layout.addWidget(self._title)
+        header.addWidget(self._title)
+        header.addStretch()
+        self._mode_btn = QPushButton("自适应")
+        self._mode_btn.setCheckable(True)
+        self._mode_btn.setCursor(Qt.PointingHandCursor)
+        self._mode_btn.setFixedHeight(22)
+        self._mode_btn.setStyleSheet(
+            "QPushButton { color: #96A1AD; background: #2A2E33; border: 1px solid #3A3F46;"
+            " border-radius: 4px; padding: 0 10px; font-size: 12px; }"
+            "QPushButton:hover { color: #E8E4D9; border-color: #4A4F56; }"
+            "QPushButton:checked { color: #1E2023; background: #D4AF37; border-color: #D4AF37; }"
+        )
+        self._mode_btn.toggled.connect(self._on_mode_toggled)
+        header.addWidget(self._mode_btn)
+        layout.addLayout(header)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        enable_hover_scroll(self._scroll)  # 鼠标离开自动隐藏滚动条
         # 细滚动条 + 透明轨道：内容不溢出时 AsNeeded 自动隐藏，溢出时才滑出 8px 细条。
         self._scroll.setStyleSheet(
             "QScrollArea { background: #1E2023; border: 1px solid #3A3F46; border-radius: 6px; }"
@@ -174,7 +263,10 @@ class GridView(QFrame):
 
         self._worker: DecodeWorker | None = None
         self._cells: list[_FrameCell] = []
-        self._pending: list = []          # 新序列解码中的帧缓存（整体替换用）
+        self._pending: list[tuple[int, object, str]] = []  # (idx, PIL.Image, label) 缓存
+        # 解码完成后保存，供「原图/自适应」切换重算用
+        self._loaded: list[tuple[QPixmap, str, int]] = []  # (pixmap, label, idx)
+        self._max_w = self._max_h = 0  # 原图最大尺寸
 
     def show_sequence(self, layers: list[list[Path]]) -> None:
         """layers[0] 为最底层；单层即普通序列，多层即同 ID 叠层合成。
@@ -206,21 +298,108 @@ class GridView(QFrame):
             c.deleteLater()
         self._cells = []
 
-    def _on_frame(self, idx: int, img, _label: str) -> None:
+    def _on_frame(self, idx: int, img, label: str) -> None:
         # sender() 竞态防护：旧 worker 残留的 queued 信号直接忽略
         if self._worker is None or self.sender() is not self._worker:
             return
-        self._pending.append((idx, img))
+        self._pending.append((idx, img, label))
 
     def _on_done(self, total: int) -> None:
         if self._worker is None or self.sender() is not self._worker:
             return
         self._clear_cells()
-        for idx, img in self._pending:
+        if not self._pending:
+            self._title.setText("A · 序列帧网格（无帧）")
+            return
+
+        # 计算统一格子尺寸：取所有帧最大宽高 + 标签高度 + 内边距
+        # （并集 bbox 后各帧尺寸本应一致，取 max 兼容异常情况）
+        max_w = max_h = 0
+        pixmaps: list[QPixmap] = []
+        for _idx, img, _label in self._pending:
+            pix = _img_to_pixmap(img)
+            pixmaps.append(pix)
+            max_w = max(max_w, pix.width())
+            max_h = max(max_h, pix.height())
+
+        # 保存解码结果，供「原图/自适应」切换重算
+        self._loaded = [(pixmaps[i], label, idx) for i, (idx, _img, label) in enumerate(self._pending)]
+        self._max_w, self._max_h = max_w, max_h
+
+        self._build_cells()
+        pixmaps.clear()
+        self._pending = []
+        mode = "自适应 2×4" if self._mode_btn.isChecked() else "100% 原尺寸"
+        self._title.setText(f"A · 序列帧网格（{total} 帧 · {mode} · 并集 bbox）")
+
+    def _build_cells(self) -> None:
+        """根据当前模式（原图/自适应）构建所有 cell。"""
+        self._clear_cells()
+        if not self._loaded:
+            return
+        if self._mode_btn.isChecked():
+            # 自适应模式：按视口宽度算 4 列的格子尺寸，图片缩放适应
+            self._apply_fit_layout()
+        else:
+            # 原图模式：100% 原尺寸
+            cell_w = self._max_w + 2 * _FrameCell._PAD
+            cell_h = self._max_h + 2 * _FrameCell._PAD + _FrameCell._LABEL_H
+            cell_size = QSize(cell_w, cell_h)
+            for pix, label, idx in self._loaded:
+                cell = _FrameCell(idx)
+                cell.set_pixmap(pix)
+                cell.set_label(label)
+                cell.set_cell_size(cell_size)
+                cell.clicked.connect(lambda i=idx: self.frame_clicked.emit(i))
+                self._flow.addWidget(cell)
+                self._cells.append(cell)
+
+    def _apply_fit_layout(self) -> None:
+        """自适应模式：4 列、按视口宽度等分，图片按比例缩放。"""
+        if not self._loaded:
+            return
+        # 视口可用宽度 = scroll.width() - 滚动条 - FlowLayout 左右 margin
+        margin = 8
+        h_spacing = 6
+        vbar = self._scroll.verticalScrollBar()
+        vbar_w = vbar.width() if vbar.isVisible() else 0
+        avail_w = self._scroll.viewport().width() - 2 * margin
+        if avail_w < 100:
+            avail_w = self._scroll.width() - 2 * margin - vbar_w
+        cols = 4
+        cell_w = max(64, (avail_w - (cols - 1) * h_spacing) // cols)
+        # 图片区高度按原图比例缩放：以最大宽度为基准等比
+        if self._max_w > 0:
+            img_h = int(self._max_h * cell_w / self._max_w)
+        else:
+            img_h = cell_w
+        cell_h = img_h + 2 * _FrameCell._PAD + _FrameCell._LABEL_H
+        cell_size = QSize(cell_w, cell_h)
+        img_area_w = cell_w - 2 * _FrameCell._PAD
+        img_area_h = img_h
+        for pix, label, idx in self._loaded:
             cell = _FrameCell(idx)
-            cell.set_pixmap(_img_to_pixmap(img))
+            cell.set_pixmap(pix)  # 存原图
+            cell.set_label(label)
+            cell.set_cell_size(cell_size)
+            cell.rescale_pixmap(img_area_w, img_area_h)  # 缩放显示
             cell.clicked.connect(lambda i=idx: self.frame_clicked.emit(i))
             self._flow.addWidget(cell)
             self._cells.append(cell)
-        self._pending = []
-        self._title.setText(f"A · 序列帧网格（{total} 帧 · 100% 原尺寸 · 并集 bbox · 自动换行）")
+
+    def _on_mode_toggled(self, checked: bool) -> None:
+        """切换原图/自适应。"""
+        self._mode_btn.setText("原图" if checked else "自适应")
+        if self._loaded:
+            self._build_cells()
+            total = len(self._loaded)
+            mode = "自适应 2×4" if checked else "100% 原尺寸"
+            self._title.setText(f"A · 序列帧网格（{total} 帧 · {mode} · 并集 bbox）")
+
+    def resizeEvent(self, event) -> None:
+        """视口宽度变化时，自适应模式重算布局。"""
+        super().resizeEvent(event)
+        if self._mode_btn.isChecked() and self._loaded:
+            # 用 _build_cells 而非 _apply_fit_layout：前者会先 _clear_cells，
+            # 避免 resize 反复触发导致 cell 无限累积。
+            self._build_cells()

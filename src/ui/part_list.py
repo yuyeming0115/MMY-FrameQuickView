@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QAbstractItemView, QHeaderView,
 )
 
+from .hover_scroll import enable_hover_scroll
+
 from ..core.namemap import NameMap
 from ..core.scanner import PartData, ScanResult
 
@@ -88,6 +90,7 @@ class PartList(QFrame):
         # 滚动条按需出现；overlay 样式下隐藏时不占布局空间，避免切换条目时宽度回弹。
         self.tree.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.tree.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        enable_hover_scroll(self.tree)  # 鼠标离开自动隐藏滚动条
         self.tree.setUniformRowHeights(True)        # 行高一致 = sizeHint 不抖
         self.tree.setExpandsOnDoubleClick(False)
         # 锁定第 0 列宽度 = 不再随「最长可见条目」自动 resize 导致侧栏扩缩。

@@ -169,7 +169,9 @@ class ButtonMatrix(QFrame):
         miss_acts: set[str] = set()
         if direction:
             # 三态：expected（该类型×方向约定动作）/ present（实际拥有）/ unexpected（不适用）
-            expected = set(tpl.expected_actions(part.character_type, direction))
+            # 用 effective_type（覆盖 wings/mount/npc/空），与 scanner 查漏一致
+            eff_type = part.effective_type or part.character_type
+            expected = set(tpl.expected_actions(eff_type, direction))
             present = set(part.available_actions(direction))
             miss_acts = expected - present          # 约定要有却没有 → 红
             unexpected = set(tpl.actions) - expected  # 本类型不需要 → 灰
@@ -205,7 +207,9 @@ class ButtonMatrix(QFrame):
 
         if direction:
             # 组级三态：以「类型 × 方向」基准对照组内并集拥有（见 scanner._group_parts）
-            expected = set(tpl.expected_actions(group.character_type, direction))
+            # 用 effective_type（覆盖 wings/mount/npc），与 scanner 组级查漏一致
+            eff_type = group.effective_type or group.character_type
+            expected = set(tpl.expected_actions(eff_type, direction))
             owned_a_dir: set[str] = set()
             for p in group.parts:
                 owned_a_dir |= set(p.available_actions(direction))
