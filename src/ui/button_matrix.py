@@ -54,7 +54,7 @@ class ButtonRow(QFrame):
                 item.widget().deleteLater()
 
         for name in names:
-            btn = QPushButton(name + (" 缺" if name in missing else ""))
+            btn = QPushButton(name)
             btn.setCheckable(True)
             btn.setProperty("missing", name in missing)
             btn.setStyleSheet(BTN_STYLE)

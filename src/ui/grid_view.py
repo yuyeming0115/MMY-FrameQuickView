@@ -11,14 +11,14 @@ from __future__ import annotations
 import numpy as np
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Signal, Qt, QPoint, QSize, QRect
+from PySide6.QtCore import Qt, QPoint, QSize, QRect, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QFrame, QLabel, QLayout, QLayoutItem, QScrollArea, QSizePolicy,
     QVBoxLayout, QWidget,
 )
 
-from ..core.imageops import composite_layers, sequence_union_bbox
+from .worker import DecodeWorker
 
 
 class FlowLayout(QLayout):
@@ -141,25 +141,6 @@ class _FrameCell(QLabel):
         super().mouseReleaseEvent(event)
 
 
-class _GridWorker(QThread):
-    frame_ready = Signal(int, object, str)
-    finished = Signal(int)
-
-    def __init__(self, layers):
-        super().__init__()
-        self._layers = layers
-
-    def run(self) -> None:
-        all_paths = [p for layer in self._layers for p in layer if p]
-        bbox = sequence_union_bbox(all_paths) or (0, 0, 1, 1)
-        n = max((len(layer) for layer in self._layers), default=0)
-        for i in range(n):
-            per = [layer[i] if i < len(layer) else None for layer in self._layers]
-            img = composite_layers(per, bbox)
-            self.frame_ready.emit(i, img, f"{i + 1:04d}")
-        self.finished.emit(n)
-
-
 class GridView(QFrame):
     frame_clicked = Signal(int)
 
@@ -182,7 +163,7 @@ class GridView(QFrame):
         self._scroll.setWidget(self._viewport)
         layout.addWidget(self._scroll, 1)
 
-        self._worker: _GridWorker | None = None
+        self._worker: DecodeWorker | None = None
         self._cells: list[_FrameCell] = []
 
     def show_sequence(self, layers: list[list[Path]]) -> None:
@@ -192,7 +173,7 @@ class GridView(QFrame):
             self._title.setText("A · 序列帧网格（无帧）")
             return
         self._title.setText("A · 序列帧网格 · 加载中…")
-        self._worker = _GridWorker(layers)
+        self._worker = DecodeWorker(layers)
         self._worker.frame_ready.connect(self._on_frame)
         self._worker.finished.connect(self._on_done)
         self._worker.start()

@@ -61,7 +61,8 @@
   .mock .b.layer.on{border-style:solid; border-color:var(--app-gold); color:var(--app-gold);}
   .mock .main{display:flex; flex:1;}
   .mock .a{flex:1.25; padding:12px; border-right:1px solid var(--app-border);}
-  .mock .bpane{flex:1; padding:12px; display:flex; flex-direction:column; align-items:center; gap:10px;}
+  .mock .bpane{flex:1; padding:12px; display:flex; flex-direction:column; align-items:stretch; gap:10px;}
+  .mock .bpane .stage{align-self:center;}
   .mock .pane-title{color:var(--app-sub); font-size:12px; margin-bottom:8px; letter-spacing:1px;}
   .mock .grid{display:grid; grid-template-columns:repeat(4,1fr); gap:10px;}
   .mock .cell{background:var(--app-card); border-radius:8px; aspect-ratio:1/1.1; display:flex; align-items:center; justify-content:center; position:relative;}
@@ -146,18 +147,6 @@
         <div class="cnt">共 16 项 · 按 ID 分组 · 1 项缺漏</div>
       </div>
       <div class="right">
-        <div class="btnrows">
-          <div class="brow"><span class="lbl">方向</span>
-            <span class="b sel">E</span><span class="b">N</span><span class="b">NW</span><span class="b miss">S 缺</span><span class="b">SE</span>
-          </div>
-          <div class="brow"><span class="lbl">动作</span>
-            <span class="b">idle</span><span class="b sel">run</span><span class="b">attack</span><span class="b">skill</span><span class="b miss">hurt 缺</span><span class="b">block</span><span class="b">dead</span><span class="b">ride_idle</span><span class="b">ride_run</span>
-          </div>
-          <div class="brow"><span class="lbl">叠层</span>
-            <span class="b layer on">✓ shadow（最底层）</span><span class="b layer on">✓ weapon</span>
-            <span style="color:var(--app-sub); font-size:12px;">← 同 ID 部件，可勾选</span>
-          </div>
-        </div>
         <div class="main">
           <div class="a">
             <div class="pane-title">A · 序列帧网格（叠层合成 · 100% · 包围盒裁剪）</div>
@@ -178,6 +167,14 @@
               <span class="badge">run / E · 12 FPS · shadow+weapon</span>
               <span class="bgtoggle">背景: 棋盘格 ▾</span>
               <div class="lsprite big f3"><div class="sh"></div><div class="bd"></div></div>
+            </div>
+            <div class="btnrows">
+              <div class="brow"><span class="lbl">方向</span>
+                <span class="b sel">E</span><span class="b">N</span><span class="b">NW</span><span class="b miss">S 缺</span><span class="b">SE</span>
+              </div>
+              <div class="brow"><span class="lbl">动作</span>
+                <span class="b">idle</span><span class="b sel">run</span><span class="b">attack</span><span class="b">skill</span><span class="b miss">hurt 缺</span><span class="b">block</span><span class="b">dead</span><span class="b">ride_idle</span><span class="b">ride_run</span>
+              </div>
             </div>
             <div class="ctrl">
               <span class="cbtn">⏮</span><span class="cbtn">▶</span><span class="cbtn">⏭</span>
@@ -208,7 +205,7 @@
   <h2>三、同 ID 叠层设计（v0.3 核心新增）</h2>
   <table>
     <tr><th>要点</th><th>规则</th></tr>
-    <tr><td>触发条件</td><td>选中部件的同 ID 组内存在其他部件 → 按钮区出现「叠层」chips 行，默认全勾选</td></tr>
+    <tr><td>触发条件</td><td>左栏点击 ID 组头 → 自动按 <code>layer_order</code> 叠合同 ID 全部部件；点击单部件 → 仅显示该部件</td></tr>
     <tr><td>叠放顺序</td><td>模板 <code>layer_order</code> 定义，数组前 = 越底层；<b>shadow 固定最底层</b></td></tr>
     <tr><td>对齐方式</td><td>参与层共享同一并集 bbox 窗口，各层按同一窗口裁剪后叠加，不错位</td></tr>
     <tr><td>作用范围</td><td>A 区网格与 B 区动画同步叠层；仅限同 ID，不做跨 ID 自由组合</td></tr>
@@ -260,9 +257,9 @@
     <tr><th>阶段</th><th>内容</th><th>状态</th></tr>
     <tr><td>M0</td><td>方案评审</td><td class="ok">✅ v0.3 定稿</td></tr>
     <tr><td>M1</td><td>骨架 PR：拖拽 + 模板 + 左栏分组列表（中文名）+ 按钮矩阵 + 缺漏标记</td><td class="ok">✅ PR #1 已合并</td></tr>
-    <tr><td>M2</td><td>A 区网格 + bbox 裁剪 + 同ID叠层合成</td><td class="ok">✅ 已完成 · PR #2 待合并</td></tr>
-    <tr><td>M3</td><td>B 区动画 + FPS/步进 + 棋盘格背景</td><td>🚧 进行中（下一步）</td></tr>
-    <tr><td>M4</td><td>模板编辑器 + 打包发布</td><td>待启动</td></tr>
+    <tr><td>M2</td><td>A 区网格 + bbox 裁剪 + 同ID叠层合成（FlowLayout 自动换行修复）</td><td class="ok">✅ PR #2 已合并</td></tr>
+    <tr><td>M3</td><td>B 区动画 + FPS/步进 + 棋盘格背景 + A/B 联动</td><td class="ok">✅ 完成 · PR #3 待合并</td></tr>
+    <tr><td>M4</td><td>模板编辑器 + 打包发布</td><td>🚧 下一步</td></tr>
   </table>
 </section>
 

@@ -20,12 +20,13 @@ from src.app import MainWindow                        # noqa: E402
 REAL_ROOT = Path(r"E:\XYJProject\美术资源\动画序列帧\角色输出图")
 
 
-def _wait_grid(win) -> None:
-    """等 GridView 后台解码/合成线程结束（offscreen 下事件驱动）。"""
+def _wait_workers(win) -> None:
+    """等 GridView / AnimView 后台解码线程结束（offscreen 下事件驱动）。"""
     for _ in range(400):
         QApplication.processEvents()
-        w = win.grid_view._worker
-        if w is None or not w.isRunning():
+        wg = win.grid_view._worker
+        wa = win.anim_view._worker
+        if (wg is None or not wg.isRunning()) and (wa is None or not wa.isRunning()):
             break
     QApplication.processEvents()
 
@@ -54,20 +55,30 @@ def main() -> int:
         # ---- M2：组叠层 + 单部件网格渲染 ----
         grp = win._result.groups[0]
         win._on_group_selected(grp.res_id)
-        _wait_grid(win)
+        _wait_workers(win)
         cells_grp = len(win.grid_view._cells)
         print(f"[M2组] {grp.res_id}: grid cells={cells_grp}")
         assert cells_grp > 0, "组模式网格为空"
 
         part = win._result.parts[0]
         win._on_part_selected(part)
-        _wait_grid(win)
+        _wait_workers(win)
         cells_part = len(win.grid_view._cells)
+        frames_part = len(win.anim_view._frames)
         print(f"[M2部件] {part.name}: grid cells={cells_part}")
+        print(f"[M3动画] {part.name}: anim frames={frames_part}")
         assert cells_part > 0, "部件模式网格为空"
+        assert frames_part == cells_part, f"A/B 区帧数不一致: {frames_part} != {cells_part}"
+
+        # ---- M3：A 区点击跳 B 区 ----
+        win.grid_view.frame_clicked.emit(0)
+        _wait_workers(win)
+        print(f"[M3联动] 点击 A 区第 0 帧 → B 区 index={win.anim_view._index}")
+        assert win.anim_view._index == 0, "A/B 联动跳转失败"
     else:
         print(f"[跳过] 真实目录不存在: {REAL_ROOT}")
 
+    win.anim_view._timer.stop()
     print("GUI SMOKE OK")
     return 0
 

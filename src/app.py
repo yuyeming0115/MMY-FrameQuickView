@@ -99,14 +99,16 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(8, 0, 0, 0)
         right_layout.setSpacing(8)
-        self.matrix = ButtonMatrix()
-        self.matrix.direction_selected.connect(self._on_direction_selected)
-        self.matrix.action_selected.connect(self._on_action_selected)
-        right_layout.addWidget(self.matrix)
 
         panes = QSplitter()
         self.grid_view = GridView()
+        self.grid_view.frame_clicked.connect(self._on_grid_frame_clicked)
         self.anim_view = AnimView()
+        # 方向/动作按钮矩阵注入 B 区画布与控制栏之间
+        self.matrix = ButtonMatrix()
+        self.matrix.direction_selected.connect(self._on_direction_selected)
+        self.matrix.action_selected.connect(self._on_action_selected)
+        self.anim_view.set_matrix_widget(self.matrix)
         panes.addWidget(self.grid_view)
         panes.addWidget(self.anim_view)
         panes.setStretchFactor(0, 5)
@@ -202,7 +204,12 @@ class MainWindow(QMainWindow):
 
     def _after_matrix_change(self) -> None:
         self._show_grid()
+        self._show_anim()
         self._refresh_status()
+
+    def _on_grid_frame_clicked(self, idx: int) -> None:
+        """A 区点击某帧 → B 区跳转并暂停，方便逐帧对照。"""
+        self.anim_view.goto_frame(idx)
 
     def _current_ad(self, direction: str | None, action: str | None):
         if not direction or not action:
@@ -217,25 +224,32 @@ class MainWindow(QMainWindow):
                     return ad
         return None
 
+    def _layers_for_current(self) -> list[list[Path]]:
+        """按当前 (组/部件) + (方向,动作) 计算各层帧序列。"""
+        layers: list[list[Path]] = []
+        direction, action = self.matrix.current()
+        if not direction or not action:
+            return layers
+        if self._part is not None:
+            ad = self._part.action_data(direction, action)
+            return [ad.frames] if ad else layers
+        # 组模式：按 layer_rank 排序的 parts 各取 (d,a) 帧，shadow 自动最底
+        for p in self._group.parts:
+            ad = p.action_data(direction, action)
+            layers.append(ad.frames if ad else [])
+        return layers
+
     def _show_grid(self) -> None:
         """按当前 (组/部件) + (方向,动作) 计算各层帧序列，交给 GridView 渲染。"""
         if self._group is None and self._part is None:
             return
-        direction, action = self.matrix.current()
-        if not direction or not action:
-            self.grid_view.show_sequence([])
+        self.grid_view.show_sequence(self._layers_for_current())
+
+    def _show_anim(self) -> None:
+        """B 区同步加载当前组合的动画。"""
+        if self._group is None and self._part is None:
             return
-        if self._part is not None:
-            ad = self._part.action_data(direction, action)
-            layers = [ad.frames] if ad else []
-            self.grid_view.show_sequence(layers)
-            return
-        # 组模式：按 layer_rank 排序的 parts 各取 (d,a) 帧，shadow 自动最底
-        layers = []
-        for p in self._group.parts:
-            ad = p.action_data(direction, action)
-            layers.append(ad.frames if ad else [])
-        self.grid_view.show_sequence(layers)
+        self.anim_view.show_sequence(self._layers_for_current())
 
     def _refresh_status(self) -> None:
         """状态栏：帧数 / 帧号连续性 / 缺漏 / 配套摘要。"""
