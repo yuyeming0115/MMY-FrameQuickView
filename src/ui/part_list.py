@@ -23,6 +23,7 @@ TEXT = QColor("#E8E4D9")
 
 class PartList(QFrame):
     part_selected = Signal(object)  # PartData
+    group_selected = Signal(str)    # res_id（点击组头时触发，用于同ID叠层显示）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -98,11 +99,9 @@ class PartList(QFrame):
                     header += "  🔴"
                 grp_item = QTreeWidgetItem([header])
                 grp_item.setForeground(0, QBrush(SUB))
-                grp_item.setData(0, Qt.UserRole, None)
-                # 组头可编辑（改名），不可作为部件选中
-                grp_item.setFlags(
-                    (grp_item.flags() | Qt.ItemIsEditable) & ~Qt.ItemIsSelectable
-                )
+                grp_item.setData(0, Qt.UserRole, "GRP:" + grp.res_id)
+                # 组头可选中（叠层显示）且可编辑（改名）
+                grp_item.setFlags(grp_item.flags() | Qt.ItemIsEditable | Qt.ItemIsSelectable)
                 self.tree.addTopLevelItem(grp_item)
 
                 for pd in grp.parts:
@@ -155,7 +154,11 @@ class PartList(QFrame):
         if not items:
             return
         key = items[0].data(0, Qt.UserRole)
-        if key and key in self._parts:
+        if not key:
+            return
+        if key.startswith("GRP:"):
+            self.group_selected.emit(key[4:])
+        elif key in self._parts:
             self.part_selected.emit(self._parts[key])
 
     def _on_item_changed(self, item: QTreeWidgetItem, _col: int) -> None:

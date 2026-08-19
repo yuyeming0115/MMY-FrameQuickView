@@ -7,7 +7,7 @@ from __future__ import annotations
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
-from ..core.scanner import PartData
+from ..core.scanner import PartData, IdGroup
 from ..core.template import Template
 
 BTN_STYLE = """
@@ -114,6 +114,38 @@ class ButtonMatrix(QFrame):
                 avail = part.available_actions(direction)
                 action = avail[0] if avail else None
         self.act_row.rebuild(tpl.actions, miss_acts, action)
+
+    def show_group(self, group: IdGroup, direction: str | None, action: str | None) -> None:
+        """组视图：按钮基于组内所有部件的并集 (方向,动作)。
+
+        缺失标记 = 模板要求但组内无任何部件拥有的组合（快速看出这个 ID 整体缺什么）。
+        """
+        self._part = None
+        tpl = self._tpl
+        if tpl is None:
+            return
+        avail_d: set[str] = set()
+        owned_a: set[str] = set()
+        for p in group.parts:
+            for d in p.available_directions():
+                avail_d.add(d)
+                owned_a |= set(p.available_actions(d))
+        miss_dirs = set(tpl.directions) - avail_d
+        if direction is None or direction in miss_dirs:
+            direction = sorted(avail_d)[0] if avail_d else None
+        self.dir_row.rebuild(tpl.directions, miss_dirs, direction)
+
+        if direction:
+            owned_a_dir: set[str] = set()
+            for p in group.parts:
+                owned_a_dir |= set(p.available_actions(direction))
+            miss_acts = set(tpl.actions) - owned_a_dir
+            if action is None or action in miss_acts:
+                avail = sorted(owned_a_dir)
+                action = avail[0] if avail else None
+            self.act_row.rebuild(tpl.actions, miss_acts, action)
+        else:
+            self.act_row.rebuild(tpl.actions, set(tpl.actions), None)
 
     def current(self) -> tuple[str | None, str | None]:
         d = next((n for n, b in self.dir_row._buttons.items() if b.isChecked()), None)
