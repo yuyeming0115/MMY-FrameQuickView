@@ -232,7 +232,20 @@
 </section>
 
 <section>
-  <h2>五、缺漏检测逻辑</h2>
+  <h2>五、中文名映射（左栏显示「502019 · 杜如晦」）</h2>
+  <p>沿用现有 <code>ID-角色-名字匹配表.txt</code>（TAB 分隔、# 注释），四件套把维护成本降到最低：</p>
+  <table>
+    <tr><th>机制</th><th>说明</th></tr>
+    <tr><td>自动发现</td><td>拖入目录及父级自动找 <code>*匹配表*.txt</code>，无需配置路径</td></tr>
+    <tr><td>自动登记</td><td>扫描后表里没有的 ID 自动追加 <code>ID⇥（待命名）</code>（带日期分节）。维护 = <b>补空</b>，不再手写整张表</td></tr>
+    <tr><td>内联改名</td><td>左栏组头 F2 / 单击选中态直接改中文名，回车写回 txt（保留注释与分组结构）</td></tr>
+    <tr><td>热更新</td><td>txt 被外部编辑后自动重载刷新列表</td></tr>
+  </table>
+  <div class="confirmed">✅ 已随 M1 实现并实测：扫描「角色输出图」（164 部件 / 157 ID 组）自动登记 13 个新 ID；查找优先级 完整文件夹名 → 纯 ID；编码自适应 UTF-8/GBK；部位中文名（头发/影子…）自动回填。</div>
+</section>
+
+<section>
+  <h2>六、缺漏检测逻辑</h2>
   <table>
     <tr><th>层</th><th>检测内容</th><th>呈现</th></tr>
     <tr><td>结构层</td><td>模板 方向×动作 笛卡尔积 vs 实际目录</td><td>按钮暗红 + 列表红点</td></tr>
@@ -242,18 +255,18 @@
 </section>
 
 <section>
-  <h2>六、里程碑</h2>
+  <h2>七、里程碑</h2>
   <table>
     <tr><th>阶段</th><th>内容</th><th>状态</th></tr>
     <tr><td>M0</td><td>方案评审</td><td class="ok">✅ v0.3 定稿</td></tr>
-    <tr><td>M1</td><td>骨架 PR：拖拽 + 模板加载 + 左栏分组列表 + 按钮矩阵 + 缺漏标记</td><td>🚧 进行中</td></tr>
+    <tr><td>M1</td><td>骨架 PR：拖拽 + 模板 + 左栏分组列表（中文名）+ 按钮矩阵 + 缺漏标记</td><td class="ok">✅ PR #1 待合并</td></tr>
     <tr><td>M2</td><td>A 区网格 + bbox 裁剪 + 同ID叠层合成</td><td>待启动</td></tr>
     <tr><td>M3</td><td>B 区动画 + FPS/步进 + 棋盘格背景</td><td>待启动</td></tr>
     <tr><td>M4</td><td>模板编辑器 + 打包发布</td><td>待启动</td></tr>
   </table>
 </section>
 
-<footer>MMY-FrameQuickView · 设计报告 v0.3（定稿）· 2026-08-18 · 本地归档</footer>
+<footer>MMY-FrameQuickView · 设计报告 v0.3（定稿）· 2026-08-19 更新 · 本地归档</footer>
 </div>
 </body>
 </html>
