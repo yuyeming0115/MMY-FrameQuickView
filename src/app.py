@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QFileSystemWatcher
+from PySide6.QtCore import QFileSystemWatcher, Qt
 from PySide6.QtWidgets import (
-    QComboBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
+    QComboBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
     QPushButton, QSplitter, QVBoxLayout, QWidget,
 )
 
@@ -191,7 +191,9 @@ class MainWindow(QMainWindow):
         self._after_matrix_change()
 
     def _on_direction_selected(self, direction: str) -> None:
-        self._update_matrix(direction, None)
+        # 切换方向时保持当前动作（该动作在新方向缺失时由 show_part/show_group 兜底）
+        _, action = self.matrix.current()
+        self._update_matrix(direction, action)
         self._after_matrix_change()
 
     def _on_action_selected(self, action: str) -> None:
@@ -213,6 +215,34 @@ class MainWindow(QMainWindow):
     def _on_grid_frame_clicked(self, idx: int) -> None:
         """A 区点击某帧 → B 区跳转并暂停，方便逐帧对照。"""
         self.anim_view.goto_frame(idx)
+
+    def keyPressEvent(self, event) -> None:
+        """键盘导航（M5）：←/→ 循环切换方向，↑/↓ 循环切换动作。
+
+        - 走与鼠标点击相同的信号路径，缺失组合由 show_part/show_group 兜底
+        - 焦点在输入控件（过滤框/模板下拉）时不拦截，避免干扰文字编辑
+        """
+        tpl = self._tpl
+        if tpl is not None and (self._part is not None or self._group is not None):
+            fw = self.focusWidget()
+            if not isinstance(fw, (QLineEdit, QComboBox)):
+                key = event.key()
+                if key in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down):
+                    direction, action = self.matrix.current()
+                    dirs, acts = tpl.directions, tpl.actions
+                    if key == Qt.Key_Left and direction in dirs:
+                        self._on_direction_selected(dirs[(dirs.index(direction) - 1) % len(dirs)])
+                        return
+                    if key == Qt.Key_Right and direction in dirs:
+                        self._on_direction_selected(dirs[(dirs.index(direction) + 1) % len(dirs)])
+                        return
+                    if key == Qt.Key_Up and action in acts:
+                        self._on_action_selected(acts[(acts.index(action) - 1) % len(acts)])
+                        return
+                    if key == Qt.Key_Down and action in acts:
+                        self._on_action_selected(acts[(acts.index(action) + 1) % len(acts)])
+                        return
+        super().keyPressEvent(event)
 
     def _current_ad(self, direction: str | None, action: str | None):
         if not direction or not action:
