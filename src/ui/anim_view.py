@@ -1,19 +1,32 @@
-"""B 区：GIF 动画预览（M3）。
+"""B 区：GIF 动画预览（M3）+ 左侧方向/动作按钮矩阵 + 底部整行控制条。
 
+布局（M8）：
+- 外层 QVBoxLayout：
+    - 内嵌 QHBoxLayout：左 = ButtonMatrix 纵列 | 右 = canvas
+    - 底部 = 控制条（QHBoxLayout），跨左+右整行
 - 100% 原尺寸、透明无边框、并集 bbox 对齐
 - 播放 / 暂停、FPS 滑杆 (1–60)、上一帧 / 下一帧、循环模式
 - 默认透明融入 UI，可切换棋盘格背景（方便检查 alpha 毛边）
 - A 区点击某帧 → goto_frame(idx) 跳转并暂停
+
+显向 overlay（M8）：
+- 3x3 网格（中心留给动画帧），8 个方向热区：NW/N/NE/W/E/SW/S/SE
+- 沉浸式：仅 hover / 拖拽时显示该方向热区，离开画布后全部隐藏
+- 点击某方向 = 触发 direction_overlay_clicked(direction)，等同按钮矩阵的方向点击
+- 按住并拖拽：以画布中心为原点计算角度，按 45° 分桶连续切换方向 → 模拟 idle 旋转
+- 不在当前模板 directions 内的方向（如 W/NE/SW）不响应点击/拖拽
 """
 from __future__ import annotations
+
+import math
 
 import numpy as np
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPixmap
+from PySide6.QtCore import Qt, QTimer, Signal, QPointF, QRectF
+from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSlider,
+    QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QSlider,
     QVBoxLayout, QWidget,
 )
 
@@ -21,6 +34,37 @@ from .worker import DecodeWorker
 
 
 FPS_MIN, FPS_MAX = 1, 60
+
+# 左侧按钮矩阵列宽度（与 button_matrix.ButtonMatrix.setFixedWidth 保持一致）
+# 改这里记得同步。
+LEFT_PANEL_WIDTH = 96
+
+# 8 方向网格槽位：(方向名, (row, col))；中心 (1,1) 留空放动画
+OVERLAY_SLOTS: list[tuple[str, tuple[int, int]]] = [
+    ("NW", (0, 0)), ("N", (0, 1)), ("NE", (0, 2)),
+    ("W",  (1, 0)),               ("E",  (1, 2)),
+    ("SW", (2, 0)), ("S", (2, 1)), ("SE", (2, 2)),
+]
+
+# 屏幕 y 向下时，atan2(dy, dx) 角度 → 方向映射（按 45° 分桶，中心偏移 22.5°）
+ANGLE_TO_DIR = ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]
+
+
+class _MatrixScrollArea(QScrollArea):
+    """QScrollArea 子类：viewport 尺寸变化时同步 widget 宽度，避免 widget 比 viewport 宽被裁边。
+
+    setWidgetResizable(True) + 在 resizeEvent 里 setFixedWidth(viewport.width()) 双保险：
+    offscreen / 某些主题下 widgetResizable 不生效导致 widget 比 viewport 宽被裁边，
+    这里主动同步 widget 宽度到 viewport。
+    """
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        w = self.widget()
+        if w is not None:
+            vp_w = self.viewport().width()
+            if vp_w > 0:
+                w.setFixedWidth(vp_w)
 
 
 def _img_to_pixmap(img) -> QPixmap:
@@ -31,7 +75,9 @@ def _img_to_pixmap(img) -> QPixmap:
 
 
 class _AnimCanvas(QLabel):
-    """带可选棋盘格背景的画布，居中绘制当前帧。"""
+    """带可选棋盘格背景 + 显向 overlay 的画布，居中绘制当前帧。"""
+
+    direction_overlay_clicked = Signal(str)  # 点击/拖拽某方向热区时发出
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -41,17 +87,150 @@ class _AnimCanvas(QLabel):
         self._checker = False
         self._cell = 16
 
+        # 显向 overlay 状态
+        self._overlay_enabled = False          # 「显向」toggle 控制；False 时鼠标事件完全透明
+        self._overlay_dirs: set[str] = set()   # 当前 tpl.directions，只响应这些方向
+        self._current_dir: str | None = None   # 当前选中的方向（overlay 高亮显示）
+        self._hover_dir: str | None = None     # 鼠标 hover 所在方向槽位（None = 未 hover 到任何槽）
+        self._drag_origin: QPointF | None = None
+        self._drag_last_dir: str | None = None
+        self.setMouseTracking(False)           # 由 _on_overlay_enabled_changed 按需开启
+
+    # ---------------- 配置 API ----------------
     def set_checker(self, enabled: bool) -> None:
         self._checker = enabled
+        self.update()
+
+    def set_dir_overlay_enabled(self, enabled: bool) -> None:
+        """「显向」toggle：True 时鼠标 hover/拖拽可看到方向热区，False 时画布完全透明。"""
+        self._overlay_enabled = enabled
+        self.setMouseTracking(enabled)
+        if not enabled:
+            self._hover_dir = None
+            self._drag_origin = None
+            self._drag_last_dir = None
+        self.update()
+
+    def set_available_dirs(self, dirs: set[str]) -> None:
+        """同步当前模板 directions：只响应这些方向的热区点击/拖拽。"""
+        self._overlay_dirs = set(dirs)
+        self.update()
+
+    def set_current_dir(self, direction: str | None) -> None:
+        """同步当前选中方向：overlay 中该方向以金色高亮。"""
+        self._current_dir = direction
         self.update()
 
     def set_frame(self, pix: QPixmap | None) -> None:
         self._pixmap = pix
         self.update()
 
+    # ---------------- 内部：角度 ↔ 方向 ----------------
+    @staticmethod
+    def _angle_to_dir(angle_deg: float) -> str:
+        """把 atan2(dy, dx) 角度（0=右、90=下、180=左、270=上）映射到 8 方向。"""
+        idx = int(((angle_deg + 22.5) % 360) / 45) % 8
+        return ANGLE_TO_DIR[idx]
+
+    def _slot_dir_at(self, pos: QPointF) -> str | None:
+        """鼠标位置 → 3x3 网格槽位对应的方向；中心槽返回 None。"""
+        w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            return None
+        col = int(pos.x() / w * 3)
+        row = int(pos.y() / h * 3)
+        if row == 1 and col == 1:
+            return None
+        for d, (r, c) in OVERLAY_SLOTS:
+            if (r, c) == (row, col):
+                return d
+        return None
+
+    def _slot_rect(self, direction: str) -> QRectF | None:
+        """方向 → 3x3 网格中该槽位的 QRectF。"""
+        for d, (r, c) in OVERLAY_SLOTS:
+            if d == direction:
+                w, h = self.width(), self.height()
+                return QRectF(w / 3 * c, h / 3 * r, w / 3, h / 3)
+        return None
+
+    # ---------------- 事件 ----------------
+    def enterEvent(self, event) -> None:
+        if self._overlay_enabled:
+            self.setMouseTracking(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._hover_dir = None
+        self._drag_origin = None
+        self._drag_last_dir = None
+        self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event) -> None:
+        if self._overlay_enabled and event.button() == Qt.LeftButton:
+            pos = event.position()
+            self._drag_origin = pos
+            # 拖拽起始角度
+            center = QPointF(self.width() / 2, self.height() / 2)
+            dx = pos.x() - center.x()
+            dy = pos.y() - center.y()
+            if dx * dx + dy * dy > 1e-6:
+                angle = math.degrees(math.atan2(dy, dx))
+                self._drag_last_dir = self._angle_to_dir(angle)
+            else:
+                self._drag_last_dir = None
+            self.update()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if not self._overlay_enabled:
+            super().mouseMoveEvent(event)
+            return
+        pos = event.position()
+        if self._drag_origin is not None:
+            # 拖拽模式：以画布中心为原点算角度
+            center = QPointF(self.width() / 2, self.height() / 2)
+            dx = pos.x() - center.x()
+            dy = pos.y() - center.y()
+            # 拖拽距离足够才响应（防抖）
+            if dx * dx + dy * dy > 36:  # >6px
+                angle = math.degrees(math.atan2(dy, dx))
+                new_dir = self._angle_to_dir(angle)
+                if new_dir != self._drag_last_dir and new_dir in self._overlay_dirs:
+                    self.direction_overlay_clicked.emit(new_dir)
+                    self._drag_last_dir = new_dir
+                self._hover_dir = self._drag_last_dir
+                self.update()
+        else:
+            # hover 模式
+            new_hover = self._slot_dir_at(pos)
+            if new_hover != self._hover_dir:
+                self._hover_dir = new_hover
+                self.update()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._overlay_enabled and event.button() == Qt.LeftButton:
+            pos = event.position()
+            if self._drag_origin is not None:
+                # 区分「点击」与「拖拽」：位移 < 8px 视为点击
+                dx = pos.x() - self._drag_origin.x()
+                dy = pos.y() - self._drag_origin.y()
+                if dx * dx + dy * dy < 64:
+                    slot = self._slot_dir_at(pos)
+                    if slot and slot in self._overlay_dirs:
+                        self.direction_overlay_clicked.emit(slot)
+            self._drag_origin = None
+            self._drag_last_dir = None
+            self.update()
+        super().mouseReleaseEvent(event)
+
+    # ---------------- 绘制 ----------------
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
+        painter.setRenderHint(QPainter.Antialiasing, True)
 
         if self._checker:
             w, h = self.width(), self.height()
@@ -66,33 +245,126 @@ class _AnimCanvas(QLabel):
             y = (self.height() - self._pixmap.height()) // 2
             painter.drawPixmap(x, y, self._pixmap)
 
+        # 显向 overlay：仅在「显向」开启 且 (hover 或 拖拽) 时绘制
+        if self._overlay_enabled and (self._hover_dir or self._drag_origin is not None):
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            self._paint_dir_overlay(painter)
+
         painter.end()
+
+    def _paint_dir_overlay(self, painter: QPainter) -> None:
+        """绘制 3x3 方向热区（半透明虚线框 + 方向文字）；hover 或拖拽经过的方向更高亮。"""
+        w, h = self.width(), self.height()
+        font = painter.font()
+        font.setPointSize(13)
+        font.setBold(True)
+        painter.setFont(font)
+
+        active_dir = self._drag_last_dir or self._hover_dir
+
+        for d, (r, c) in OVERLAY_SLOTS:
+            rect = self._slot_rect(d)
+            if rect is None:
+                continue
+            is_active = (d == active_dir)
+            is_avail = d in self._overlay_dirs
+            is_current = (d == self._current_dir)
+
+            # 背景填充：当前/hover 状态决定透明度
+            if is_active:
+                bg = QColor(212, 175, 55, 70)          # 金色高亮（hover/拖拽）
+            elif is_current:
+                bg = QColor(212, 175, 55, 40)          # 金色弱高亮（当前方向）
+            else:
+                bg = QColor(150, 161, 173, 18)         # 极弱灰背景
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(bg))
+            painter.drawRoundedRect(rect.adjusted(2, 2, -2, -2), 6, 6)
+
+            # 边框：虚线灰/实线金
+            pen = QPen()
+            if is_active or is_current:
+                pen.setColor(QColor(212, 175, 55, 200))
+                pen.setStyle(Qt.SolidLine)
+                pen.setWidth(2)
+            else:
+                pen.setColor(QColor(150, 161, 173, 110 if is_avail else 50))
+                pen.setStyle(Qt.DashLine)
+                pen.setWidth(1)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(rect.adjusted(2, 2, -2, -2), 6, 6)
+
+            # 文字：方向名；不可用方向灰显
+            if is_active or is_current:
+                text_color = QColor(232, 228, 217, 240)
+            elif is_avail:
+                text_color = QColor(232, 228, 217, 160)
+            else:
+                text_color = QColor(90, 99, 110, 110)
+            painter.setPen(QPen(text_color))
+            painter.drawText(rect, Qt.AlignCenter, d)
 
 
 class AnimView(QFrame):
     frame_clicked = Signal(int)  # B 区点击当前帧时发出（与 A 区保持一致）
+    direction_overlay_clicked = Signal(str)  # 画布内点击/拖拽某方向热区时发出（等同按钮矩阵的方向点击）
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(4)
+
+        # ---- 上半：左按钮矩阵 | 右画布 ----
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(6)
+
+        # 左侧：方向/动作按钮矩阵（注入），用 QScrollArea 包裹防按钮溢出容器被切
+        self._matrix_container = QFrame()
+        ml = QVBoxLayout(self._matrix_container)
+        # 左 8px padding：让按钮左边框与 A/B 区 splitter 手柄（4px 灰条）拉开距离，
+        # 避免视觉上按钮"被 splitter 切掉左边"的错觉。
+        ml.setContentsMargins(8, 0, 0, 0)
+        ml.setSpacing(0)
+        self._matrix_container.setFixedWidth(LEFT_PANEL_WIDTH)
+        self._matrix_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+
+        self._matrix_scroll = _MatrixScrollArea()
+        # widgetResizable=True：QScrollArea 把 widget.resize 到 viewport 大小，
+        # 加上 _MatrixScrollArea.resizeEvent 主动 setFixedWidth 双保险。
+        # 高度若超 viewport，垂直滚动条自然出现。
+        self._matrix_scroll.setWidgetResizable(True)
+        self._matrix_scroll.setFrameShape(QFrame.NoFrame)
+        self._matrix_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._matrix_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._matrix_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }"
+        )
+        ml.addWidget(self._matrix_scroll)
+        body.addWidget(self._matrix_container)
+
+        # 右侧：标题 + canvas（不再含控制栏）
+        right = QWidget()
+        rl = QVBoxLayout(right)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(4)
 
         self._title = QLabel("B · GIF 动画预览（并集 bbox · 防抖动）")
         self._title.setStyleSheet("color: #96A1AD; font-size: 12px; letter-spacing: 1px;")
-        layout.addWidget(self._title)
+        rl.addWidget(self._title)
 
         self._canvas = _AnimCanvas()
-        layout.addWidget(self._canvas, 1)
+        # canvas 的显向信号向上转发给 app
+        self._canvas.direction_overlay_clicked.connect(self.direction_overlay_clicked)
+        rl.addWidget(self._canvas, 1)
 
-        # 方向/动作按钮矩阵占位（由 app.py 注入）
-        self._matrix_container = QWidget()
-        mcl = QVBoxLayout(self._matrix_container)
-        mcl.setContentsMargins(0, 0, 0, 0)
-        mcl.setSpacing(4)
-        layout.addWidget(self._matrix_container)
+        body.addWidget(right, 1)
+        outer.addLayout(body, 1)
 
-        # 控制栏
+        # ---- 底部整行：控制条 ----
         bar = QHBoxLayout()
         bar.setSpacing(8)
 
@@ -132,8 +404,9 @@ class AnimView(QFrame):
         bar.addWidget(self._checker_chk)
 
         bar.addStretch(1)
-        layout.addLayout(bar)
+        outer.addLayout(bar)
 
+        # 状态
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._advance)
 
@@ -147,14 +420,28 @@ class AnimView(QFrame):
         self._pending_labels: list[str] = []
 
     # ---------------- 公共 API ----------------
-    def set_matrix_widget(self, widget: QWidget) -> None:
-        """注入方向/动作按钮矩阵，显示在 B 区画布与控制栏之间。"""
-        layout = self._matrix_container.layout()
-        while layout.count():
-            item = layout.takeAt(0)
-            if item.widget():
-                item.widget().setParent(None)
-        layout.addWidget(widget)
+    def set_matrix_widget(self, widget) -> None:
+        """注入方向/动作按钮矩阵（ButtonMatrix 实例），显示在 B 区左侧 QScrollArea 内。
+
+        不主动 setFixedWidth——交给 QScrollArea 的 widgetResizable=True 自动对齐 viewport 宽度；
+        按钮矩阵高度超过 B 区时由垂直滚动条接管，避免按钮被裁切。
+        """
+        old = self._matrix_scroll.takeWidget()
+        if old is not None:
+            old.setParent(None)
+        self._matrix_scroll.setWidget(widget)
+
+    def set_dir_overlay_enabled(self, enabled: bool) -> None:
+        """「显向」toggle：开 = 画布响应 hover/拖拽方向热区；关 = 画布完全透明。"""
+        self._canvas.set_dir_overlay_enabled(enabled)
+
+    def set_available_dirs(self, dirs: set[str]) -> None:
+        """同步模板 directions：限制 overlay 只响应这些方向。"""
+        self._canvas.set_available_dirs(dirs)
+
+    def set_current_dir(self, direction: str | None) -> None:
+        """同步当前选中方向（overlay 金色高亮）。"""
+        self._canvas.set_current_dir(direction)
 
     def show_sequence(self, layers: list[list[Path]], start_idx: int = 0) -> None:
         """layers[0] 为最底层；多层即同 ID 叠层合成。

@@ -155,8 +155,17 @@ class GridView(QFrame):
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        # 细滚动条 + 透明轨道：内容不溢出时 AsNeeded 自动隐藏，溢出时才滑出 8px 细条。
         self._scroll.setStyleSheet(
-            "background: #1E2023; border: 1px solid #3A3F46; border-radius: 6px;"
+            "QScrollArea { background: #1E2023; border: 1px solid #3A3F46; border-radius: 6px; }"
+            "QScrollBar:vertical, QScrollBar:horizontal { background: transparent; border: none; margin: 0; }"
+            "QScrollBar:vertical { width: 8px; }"
+            "QScrollBar:horizontal { height: 8px; }"
+            "QScrollBar::handle { background: #4A4F56; border-radius: 4px; min-height: 24px; min-width: 24px; }"
+            "QScrollBar::handle:hover { background: #5A6068; }"
+            "QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::sub-page { background: transparent; border: none; }"
         )
         self._viewport = QWidget()
         self._flow = FlowLayout(self._viewport, margin=8, h_spacing=6, v_spacing=6)

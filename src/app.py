@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QFileSystemWatcher, Qt
+from PySide6.QtCore import QFileSystemWatcher, QSettings, Qt
 from PySide6.QtWidgets import (
-    QComboBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
-    QPushButton, QSplitter, QVBoxLayout, QWidget,
+    QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
+    QMessageBox, QPushButton, QSplitter, QVBoxLayout, QWidget,
 )
 
 from .core.namemap import NameMap, discover_map_file
@@ -35,7 +35,21 @@ QTreeWidget {
     font-size: 14px;
 }
 QTreeWidget::item:selected { background: rgba(212,175,55,0.15); color: #D4AF37; }
+QTreeWidget::item { padding: 1px 0; }                /* 行内边距稳定 = 行高稳定 */
 QSplitter::handle { background: #3A3F46; }
+
+/* 全局 overlay 滚动条：按需出现、隐藏时不占布局空间 → 切换部件/动作时侧栏不抖动。 */
+QScrollBar:vertical, QScrollBar:horizontal {
+    background: transparent; border: none; margin: 0;
+}
+QScrollBar:vertical { width: 8px; }
+QScrollBar:horizontal { height: 8px; }
+QScrollBar::handle {
+    background: #4A4F56; border-radius: 4px; min-height: 24px; min-width: 24px;
+}
+QScrollBar::handle:hover { background: #5A6068; }
+QScrollBar::add-line, QScrollBar::sub-line,
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; border: none; }
 """
 
 
@@ -54,10 +68,19 @@ class MainWindow(QMainWindow):
         self._namemap = NameMap()
         self._watcher = QFileSystemWatcher(self)
         self._watcher.fileChanged.connect(self._on_namemap_changed)
+        self._settings = QSettings("MMY", "FrameQuickView")
+        self._last_folder: Path | None = None      # 最近一次拖入的目录
+        self._last_map_file: Path | None = None    # 最近一次成功加载的匹配表
+        # 重启兜底：上次的匹配表如果还存在，自动恢复；否则下次拖入时会重新 discover。
+        saved = self._load_saved_map_path()
+        if saved is not None and saved.exists():
+            self._last_map_file = saved
 
         self._build_ui()
+        self._build_menu()
         if self._tpl:
             self.matrix.set_template(self._tpl)
+            self.anim_view.set_available_dirs(set(self._tpl.directions))
         self.statusBar().showMessage("就绪 · 拖入文件夹开始")
 
     # ---------------- UI ----------------
@@ -93,9 +116,13 @@ class MainWindow(QMainWindow):
 
         # 主体：左栏部件列表 | 右侧（按钮矩阵 + A/B 双区）
         splitter = QSplitter()
+        splitter.setChildrenCollapsible(False)    # 任何一侧不能被拖到 0，避免布局抖动
+        splitter.setHandleWidth(4)                # 细手柄，降低视觉权重
         self.part_list = PartList()
         self.part_list.part_selected.connect(self._on_part_selected)
         self.part_list.group_selected.connect(self._on_group_selected)
+        # 「📖 选择匹配表」按钮 → 打开文件选择，选完自动刷新左栏中文名
+        self.part_list.pick_namemap.connect(self._pick_map_file)
         splitter.addWidget(self.part_list)
 
         right = QWidget()
@@ -104,6 +131,8 @@ class MainWindow(QMainWindow):
         right_layout.setSpacing(8)
 
         panes = QSplitter()
+        panes.setChildrenCollapsible(False)       # A/B 区都不能折叠
+        panes.setHandleWidth(4)
         self.grid_view = GridView()
         self.grid_view.frame_clicked.connect(self._on_grid_frame_clicked)
         self.anim_view = AnimView()
@@ -111,6 +140,9 @@ class MainWindow(QMainWindow):
         self.matrix = ButtonMatrix()
         self.matrix.direction_selected.connect(self._on_direction_selected)
         self.matrix.action_selected.connect(self._on_action_selected)
+        # 「显向」toggle → 画布 overlay 开关；overlay 方向点击 → 等同方向按钮点击
+        self.matrix.overlay_toggled.connect(self.anim_view.set_dir_overlay_enabled)
+        self.anim_view.direction_overlay_clicked.connect(self._on_direction_selected)
         self.anim_view.set_matrix_widget(self.matrix)
         panes.addWidget(self.grid_view)
         panes.addWidget(self.anim_view)
@@ -119,6 +151,9 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(panes, 1)
         splitter.addWidget(right)
         splitter.setStretchFactor(1, 1)
+        # 左栏宽度锁定（PartList.setFixedWidth），这里给一致的初始比例即可。
+        splitter.setSizes([220, 1060])
+        panes.setSizes([600, 480])
 
         root.addWidget(splitter, 1)
         self.setCentralWidget(central)
@@ -128,7 +163,8 @@ class MainWindow(QMainWindow):
         if self._tpl is None:
             self.statusBar().showMessage("⚠ 无可用模板（templates/ 为空）")
             return
-        self._result = scan_root(folder, self._tpl)
+        self._last_folder = folder
+        self._result = scan_root(folder, self._tpl, char_type_of=self._namemap.char_type)
         self.drop.set_current(str(folder))
         self._setup_namemap(folder)
         self.part_list.set_namemap(self._namemap)
@@ -142,14 +178,41 @@ class MainWindow(QMainWindow):
 
     # ---------------- 中文名映射 ----------------
     def _setup_namemap(self, folder: Path) -> None:
-        """自动发现匹配表 → 加载 → 自动登记缺失 ID → 文件热更新监听。"""
-        map_file = discover_map_file(folder)
+        """自动发现匹配表 → 加载 → 自动登记缺失 ID → 文件热更新监听。
+
+        优先级：自动发现（拖入目录向上递归）→ 上次成功路径兜底（持久化在 QSettings）
+        → 弹窗让用户选（任意目录拖入都能命中已知匹配表）。
+
+        注意：每次 discover + saved 均失败时**仍会弹一次**，目的是解决
+        「上一次的 saved 路径已失效（用户移动/删除了 txt）」的情况。
+        用户取消则不再弹——只是当前部件列表没中文名，下次拖入还是会让用户选。
+        """
+        # 兜底 1：QSettings 持久化的匹配表路径（进程重启/内存清零后自动恢复）
+        if self._last_map_file is None:
+            self._last_map_file = self._load_saved_map_path()
+        map_file = discover_map_file(folder, self._last_map_file)
         if map_file is None:
+            # offscreen 测试环境跳过弹窗避免卡死。
+            import os
+            is_offscreen = os.environ.get('QT_QPA_PLATFORM', '') == 'offscreen'
+            if not is_offscreen:
+                # 主线程同步弹：阻塞，但只在「saved 为空 + discover 失败」时触发。
+                path, _ = QFileDialog.getOpenFileName(
+                    self,
+                    "选择 ID-中文名匹配表（txt）",
+                    "",
+                    "文本文件 (*.txt);;所有文件 (*)",
+                )
+                if path:
+                    self._reload_namemap(Path(path))
+                    return
             self._namemap = NameMap()
-            self.statusBar().showMessage("ℹ 未发现 *匹配表*.txt，列表暂只显示 ID")
+            self.statusBar().showMessage("ℹ 未发现匹配表，可在「文件 → 选择匹配表文件…」指定")
             return
         self._namemap = NameMap()
         self._namemap.load(map_file)
+        self._last_map_file = map_file
+        self._save_map_path(map_file)
         # 自动登记：表里没有的 ID 追加 `ID\t（待命名）`
         new_ids = self._namemap.register_missing([p.res_id for p in self._result.parts])
         if new_ids:
@@ -164,13 +227,72 @@ class MainWindow(QMainWindow):
             msg += f" · 自动登记 {len(new_ids)} 个新 ID（待命名）"
         self.statusBar().showMessage(msg)
 
+    # ---------------- 持久化：跨重启/跨目录也认得中文 ----------------
+    def _load_saved_map_path(self) -> Path | None:
+        """从 QSettings 读上次成功加载的匹配表路径，用于重启后/跨目录兜底。"""
+        p = self._settings.value("last_map_file", "", type=str)
+        if not p:
+            return None
+        path = Path(p)
+        return path if path.exists() else None
+
+    def _save_map_path(self, path: Path) -> None:
+        """把成功加载过的匹配表路径写入 QSettings（HKCU\\Software\\MMY\\FrameQuickView）。"""
+        self._settings.setValue("last_map_file", str(path))
+        self._settings.sync()
+
     def _on_namemap_changed(self, _path: str) -> None:
-        if self._namemap.path:
-            self._namemap.load(self._namemap.path)
-            # 文件被外部保存时部分编辑器会删旧建新，需要重新挂监听
-            if not self._watcher.files() and self._namemap.path.exists():
-                self._watcher.addPath(str(self._namemap.path))
-            self.part_list.refresh_names()
+        if self._namemap.path is None or not self._namemap.path.exists():
+            return
+        self._namemap.load(self._namemap.path)
+        self.part_list.refresh_names()
+        # 部分编辑器「原子保存」（删旧建新）会让 watcher 丢失该路径，需重新挂监听；
+        # 只重挂当前文件，避免误判其他被监视文件。
+        if str(self._namemap.path) not in self._watcher.files():
+            self._watcher.addPath(str(self._namemap.path))
+
+    # ---------------- 手动重载 / 指定匹配表 ----------------
+    def _reload_namemap(self, manual: Path | None = None) -> None:
+        """菜单手动触发：重新加载匹配表并刷新左栏（热更新失效时的兜底）。"""
+        if manual is not None:
+            map_file = Path(manual)
+        else:
+            folder = self._last_folder or (self._result.root if self._result else None)
+            if folder is None:
+                self.statusBar().showMessage("ℹ 先拖入文件夹，再重新加载匹配表")
+                return
+            map_file = discover_map_file(folder, self._last_map_file)
+        if map_file is None or not map_file.exists():
+            self.statusBar().showMessage("ℹ 未找到匹配表，列表暂只显示 ID")
+            return
+        self._namemap = NameMap()
+        self._namemap.load(map_file)
+        self._last_map_file = map_file
+        self._save_map_path(map_file)
+        self.part_list.set_namemap(self._namemap)
+        self.part_list.refresh_names()
+        # 重新挂监听（先清旧）
+        for f in self._watcher.files():
+            self._watcher.removePath(f)
+        self._watcher.addPath(str(map_file))
+        # 只刷新中文名，不打断当前选择；角色类型判定如需更新，重新拖入文件夹即可。
+        self.statusBar().showMessage(f"📖 匹配表已重载: {map_file.name}（中文名已更新）")
+
+    def _pick_map_file(self, _: object = None) -> None:
+        """文件对话框手动指定匹配表。"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择匹配表文件", "", "文本文件 (*.txt);;所有文件 (*)"
+        )
+        if path:
+            self._reload_namemap(Path(path))
+
+    def _build_menu(self) -> None:
+        menubar = self.menuBar()
+        file_menu = menubar.addMenu("文件")
+        act_reload = file_menu.addAction("重新加载匹配表")
+        act_reload.triggered.connect(lambda: self._reload_namemap())
+        act_pick = file_menu.addAction("选择匹配表文件…")
+        act_pick.triggered.connect(self._pick_map_file)
 
     # ---------------- 选择：单部件 / 同ID组 ----------------
     def _on_part_selected(self, part: PartData) -> None:
@@ -208,6 +330,9 @@ class MainWindow(QMainWindow):
             self.matrix.show_part(self._part, direction, action)
 
     def _after_matrix_change(self) -> None:
+        # 同步当前方向给 overlay，使画布高亮与按钮矩阵一致
+        direction, _ = self.matrix.current()
+        self.anim_view.set_current_dir(direction)
         self._show_grid()
         self._show_anim()
         self._refresh_status()
@@ -306,17 +431,28 @@ class MainWindow(QMainWindow):
         if self._part is not None:
             if self._part.missing_directions:
                 segs.append("⚠ 缺方向: " + ", ".join(self._part.missing_directions))
-            miss = sorted({a for v in self._part.missing_actions.values() for a in v})
-            if miss:
-                segs.append("⚠ 缺动作: " + ", ".join(miss[:4]) + (" …" if len(miss) > 4 else ""))
-        elif self._group is not None and self._group.pairing_issues:
-            segs.append("⚠ 配套: " + "；".join(self._group.pairing_issues[:2]))
+            if self._part.missing_actions:
+                segs.append("⚠ 缺动作 " + self._missing_actions_text(self._part.missing_actions))
+        elif self._group is not None:
+            if self._group.missing_directions:
+                segs.append("⚠ 缺方向: " + ", ".join(self._group.missing_directions))
+            if self._group.missing_actions:
+                segs.append("⚠ 缺动作 " + self._missing_actions_text(self._group.missing_actions))
+            if self._group.pairing_issues:
+                segs.append("⚠ 配套: " + "；".join(self._group.pairing_issues[:2]))
         self.statusBar().showMessage("　·　".join(segs))
+
+    def _missing_actions_text(self, missing: dict[str, list[str]]) -> str:
+        """按方向顺序拼接 `方向: 缺动作…`；方向顺序优先取模板 directions。"""
+        order = [d for d in (self._tpl.directions if self._tpl else []) if d in missing] \
+            or sorted(missing.keys())
+        return "；".join(f"{d}: " + ", ".join(missing[d]) for d in order)
 
     def _on_template_changed(self, index: int) -> None:
         if 0 <= index < len(self._templates):
             self._tpl = self._templates[index]
             self.matrix.set_template(self._tpl)
+            self.anim_view.set_available_dirs(set(self._tpl.directions))
             if self._result and self._result.root:
                 self._on_folder_dropped(self._result.root)
 
