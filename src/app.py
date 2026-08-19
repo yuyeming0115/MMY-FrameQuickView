@@ -84,6 +84,10 @@ class MainWindow(QMainWindow):
             self.matrix.set_template(self._tpl)
             self.anim_view.set_available_dirs(set(self._tpl.directions))
         self.statusBar().showMessage("就绪 · 拖入文件夹开始")
+        # 恢复 A区「原图/自适应」模式
+        saved_fit = self._settings.value("grid/fit_mode", False)
+        if saved_fit is not None and bool(saved_fit) != self.grid_view._mode_btn.isChecked():
+            self.grid_view._mode_btn.toggle()
         # 重启恢复：自动重新扫描上次拖入的目录
         if self._last_folder is not None and self._tpl is not None:
             self._on_folder_dropped(self._last_folder)
@@ -181,6 +185,10 @@ class MainWindow(QMainWindow):
         self._setup_namemap(folder)
         self.part_list.set_namemap(self._namemap)
         self.part_list.load_result(self._result)
+        # 恢复上次选中的资源项（优先用 QSettings 记忆，否则默认第一项）
+        saved_sel = self._settings.value("last/selection", "")
+        if saved_sel:
+            self.part_list._select_by_key(saved_sel)
         self._group = None
         self._part = None
         if not self._result.parts:
@@ -519,9 +527,14 @@ class MainWindow(QMainWindow):
             self._on_folder_dropped(self._result.root)
 
     def closeEvent(self, event) -> None:
-        """关闭时保存布局宽度 + 最近拖入目录到 QSettings。"""
+        """关闭时保存布局宽度 + 最近拖入目录 + 选中项 + A区模式到 QSettings。"""
         self._settings.setValue("layout/splitter", self._splitter.sizes())
         self._settings.setValue("layout/panes", self._panes.sizes())
         if self._last_folder is not None:
             self._settings.setValue("last/folder", str(self._last_folder))
+        sel = self.part_list.current_key()
+        if sel:
+            self._settings.setValue("last/selection", sel)
+        # A区「原图/自适应」模式
+        self._settings.setValue("grid/fit_mode", self.grid_view._mode_btn.isChecked())
         super().closeEvent(event)

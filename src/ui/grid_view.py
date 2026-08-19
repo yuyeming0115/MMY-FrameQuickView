@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import math
 import numpy as np
 from pathlib import Path
 
@@ -329,7 +330,7 @@ class GridView(QFrame):
         self._build_cells()
         pixmaps.clear()
         self._pending = []
-        mode = "自适应 2×4" if self._mode_btn.isChecked() else "100% 原尺寸"
+        mode = "自适应一屏全显" if self._mode_btn.isChecked() else "100% 原尺寸"
         self._title.setText(f"A · 序列帧网格（{total} 帧 · {mode} · 并集 bbox）")
 
     def _build_cells(self) -> None:
@@ -355,34 +356,53 @@ class GridView(QFrame):
                 self._cells.append(cell)
 
     def _apply_fit_layout(self) -> None:
-        """自适应模式：4 列、按视口宽度等分，图片按比例缩放。"""
+        """自适应模式：根据帧数和 A 区宽高动态算行列，所有帧一屏全显，格子最大化。"""
         if not self._loaded:
             return
-        # 视口可用宽度 = scroll.width() - 滚动条 - FlowLayout 左右 margin
+        N = len(self._loaded)
         margin = 8
         h_spacing = 6
-        vbar = self._scroll.verticalScrollBar()
-        vbar_w = vbar.width() if vbar.isVisible() else 0
+        v_spacing = 6
+        # 可用宽高（预留滚动条宽度，避免算出滚动后溢出导致再加滚动条的抖动）
         avail_w = self._scroll.viewport().width() - 2 * margin
-        if avail_w < 100:
-            avail_w = self._scroll.width() - 2 * margin - vbar_w
-        cols = 4
-        cell_w = max(64, (avail_w - (cols - 1) * h_spacing) // cols)
-        # 图片区高度按原图比例缩放：以最大宽度为基准等比
-        if self._max_w > 0:
-            img_h = int(self._max_h * cell_w / self._max_w)
-        else:
-            img_h = cell_w
-        cell_h = img_h + 2 * _FrameCell._PAD + _FrameCell._LABEL_H
-        cell_size = QSize(cell_w, cell_h)
-        img_area_w = cell_w - 2 * _FrameCell._PAD
-        img_area_h = img_h
+        avail_h = self._scroll.viewport().height() - 2 * margin
+        if avail_w < 100 or avail_h < 100:
+            return
+
+        # 原图宽高比（所有帧并集 bbox 后尺寸应一致，取 max 兜底）
+        ratio = (self._max_w / self._max_h) if self._max_h > 0 else 1.0
+
+        # 遍历可行列数，找让格子图片显示最大化的方案
+        # 约束：rows = ceil(N/cols)，总高 <= avail_h，保持原图比例不变形
+        best = None  # (img_w, cols, rows, img_area_w, img_area_h, cell_w, cell_h)
+        for cols in range(1, N + 1):
+            rows = math.ceil(N / cols)
+            cell_w = (avail_w - (cols - 1) * h_spacing) / cols
+            cell_h = (avail_h - (rows - 1) * v_spacing) / rows
+            img_area_w = cell_w - 2 * _FrameCell._PAD
+            img_area_h = cell_h - 2 * _FrameCell._PAD - _FrameCell._LABEL_H
+            if img_area_w <= 0 or img_area_h <= 0:
+                continue
+            # 保持原图比例：取宽高约束的较小缩放
+            img_w = min(img_area_w, img_area_h * ratio)
+            img_h = img_w / ratio
+            if best is None or img_w > best[0]:
+                best = (img_w, cols, rows, img_area_w, img_area_h, cell_w, cell_h)
+        if best is None:
+            return
+        _, cols, rows, img_area_w, img_area_h, cell_w, cell_h = best
+        # 实际图片显示尺寸（保持比例，居中于格子）
+        img_w = min(img_area_w, img_area_h * ratio)
+        img_h = img_w / ratio
+        cell_size = QSize(int(cell_w), int(cell_h))
+        img_area_pw = int(img_w)
+        img_area_ph = int(img_h)
         for pix, label, idx in self._loaded:
             cell = _FrameCell(idx)
             cell.set_pixmap(pix)  # 存原图
             cell.set_label(label)
             cell.set_cell_size(cell_size)
-            cell.rescale_pixmap(img_area_w, img_area_h)  # 缩放显示
+            cell.rescale_pixmap(img_area_pw, img_area_ph)  # 按比例缩放显示
             cell.clicked.connect(lambda i=idx: self.frame_clicked.emit(i))
             self._flow.addWidget(cell)
             self._cells.append(cell)
@@ -393,7 +413,7 @@ class GridView(QFrame):
         if self._loaded:
             self._build_cells()
             total = len(self._loaded)
-            mode = "自适应 2×4" if checked else "100% 原尺寸"
+            mode = "自适应一屏全显" if checked else "100% 原尺寸"
             self._title.setText(f"A · 序列帧网格（{total} 帧 · {mode} · 并集 bbox）")
 
     def resizeEvent(self, event) -> None:

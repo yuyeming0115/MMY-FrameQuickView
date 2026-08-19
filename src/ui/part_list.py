@@ -195,11 +195,23 @@ class PartList(QFrame):
     def _select_by_key(self, key: str) -> None:
         for i in range(self.tree.topLevelItemCount()):
             grp_item = self.tree.topLevelItem(i)
+            # 先检查组头本身（key = "GRP:xxxx"）
+            if grp_item.data(0, Qt.UserRole) == key:
+                self.tree.setCurrentItem(grp_item)
+                return
+            # 再检查子项（key = "xxxx_part"）
             for j in range(grp_item.childCount()):
                 child = grp_item.child(j)
                 if child.data(0, Qt.UserRole) == key:
                     self.tree.setCurrentItem(child)
                     return
+
+    def current_key(self) -> str | None:
+        """当前选中项的 key（如 GRP:50103101 或 50103101_weapon），无选中返回 None。"""
+        items = self.tree.selectedItems()
+        if not items:
+            return None
+        return items[0].data(0, Qt.UserRole)
 
     def _apply_filter(self, text: str) -> None:
         text = text.strip().lower()
