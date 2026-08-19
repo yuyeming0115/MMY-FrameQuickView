@@ -142,6 +142,25 @@ def main() -> int:
             assert d_left == exp_dl, f"左方向键切换失败: {d_left} != {exp_dl}"
         else:
             print("[跳过] 未找到覆盖全部方向的部件，键盘导航断言跳过")
+
+        # ---- M6：切换延迟清空（保留旧画面直到新序列就绪） ----
+        cells_before = len(win.grid_view._cells)
+        frames_before = len(win.anim_view._frames)
+        assert cells_before > 0 and frames_before > 0, "M6 前置：AB 区应有旧内容"
+        _, a_now = win.matrix.current()
+        # 触发动作切换（新 worker 启动，但不应立即清空旧内容）
+        win._on_action_selected(
+            win._tpl.actions[(win._tpl.actions.index(a_now) + 1) % len(win._tpl.actions)]
+        )
+        # 不等待 worker：立即断言旧内容仍在（无闪空/闪黑）
+        assert len(win.grid_view._cells) == cells_before, \
+            f"M6 切换瞬间网格被提前清空: {len(win.grid_view._cells)} != {cells_before}"
+        assert len(win.anim_view._frames) == frames_before, \
+            f"M6 切换瞬间动画被提前清空: {len(win.anim_view._frames)} != {frames_before}"
+        print(f"[M6延迟] 切换瞬间 A区 cells={len(win.grid_view._cells)} / B区 frames={len(win.anim_view._frames)} 均保留（延迟替换）")
+        _wait_workers(win)
+        assert len(win.grid_view._cells) > 0 and len(win.anim_view._frames) > 0, "M6 新序列替换失败"
+        print(f"[M6完成] 解码完成后整体替换: cells={len(win.grid_view._cells)} frames={len(win.anim_view._frames)}")
     else:
         print(f"[跳过] 真实目录不存在: {REAL_ROOT}")
 

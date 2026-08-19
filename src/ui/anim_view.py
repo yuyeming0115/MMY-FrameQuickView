@@ -143,6 +143,8 @@ class AnimView(QFrame):
         self._index = 0
         self._fps = 12
         self._on_fps_changed(12)
+        self._pending_frames: list[QPixmap] = []   # 新序列解码中缓存（整体替换用）
+        self._pending_labels: list[str] = []
 
     # ---------------- 公共 API ----------------
     def set_matrix_widget(self, widget: QWidget) -> None:
@@ -155,20 +157,26 @@ class AnimView(QFrame):
         layout.addWidget(widget)
 
     def show_sequence(self, layers: list[list[Path]], start_idx: int = 0) -> None:
-        """layers[0] 为最底层；多层即同 ID 叠层合成。"""
-        self._stop_worker()
-        self._frames = []
-        self._labels = []
-        self._index = max(0, start_idx)
-        self._canvas.set_frame(None)
-        self._play_btn.setChecked(False)
-        self._timer.stop()
+        """layers[0] 为最底层；多层即同 ID 叠层合成。
 
+        切换体验（M6）：**延迟清空 + 整体替换**——保留旧动画继续播放直到
+        新序列全部解码完成，避免切换瞬间画布闪黑。
+        """
+        self._stop_worker()
         if not layers or all(len(layer) == 0 for layer in layers):
+            self._frames = []
+            self._labels = []
+            self._index = 0
+            self._canvas.set_frame(None)
+            self._play_btn.setChecked(False)
+            self._play_btn.setText("▶ 播放")
+            self._timer.stop()
             self._title.setText("B · GIF 动画预览（无帧）")
             return
 
         self._title.setText("B · GIF 动画预览 · 解码中…")
+        self._pending_frames = []
+        self._pending_labels = []
         self._worker = DecodeWorker(layers)
         self._worker.frame_ready.connect(self._on_frame)
         self._worker.finished.connect(self._on_done)
@@ -187,19 +195,26 @@ class AnimView(QFrame):
         self._worker = None
 
     def _on_frame(self, idx: int, img, label: str) -> None:
-        self._frames.append(_img_to_pixmap(img))
-        self._labels.append(label)
-        if idx == self._index:
-            self._canvas.set_frame(self._frames[idx])
+        # sender() 竞态防护：旧 worker 残留的 queued 信号直接忽略
+        if self._worker is None or self.sender() is not self._worker:
+            return
+        self._pending_frames.append(_img_to_pixmap(img))
+        self._pending_labels.append(label)
 
     def _on_done(self, total: int) -> None:
+        if self._worker is None or self.sender() is not self._worker:
+            return
+        self._frames = self._pending_frames
+        self._labels = self._pending_labels
+        self._pending_frames = []
+        self._pending_labels = []
         self._title.setText(f"B · GIF 动画预览（{total} 帧 · 并集 bbox · 防抖动）")
         if not self._frames:
             return
-        if self._index >= total:
-            self._index = 0
-        self._canvas.set_frame(self._frames[self._index])
+        self._index = 0
+        self._canvas.set_frame(self._frames[0])
         self._play_btn.setChecked(True)
+        self._play_btn.setText("⏸ 暂停")
         self._timer.start()
 
     def _toggle_play(self, checked: bool) -> None:

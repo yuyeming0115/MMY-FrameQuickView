@@ -165,35 +165,53 @@ class GridView(QFrame):
 
         self._worker: DecodeWorker | None = None
         self._cells: list[_FrameCell] = []
+        self._pending: list = []          # 新序列解码中的帧缓存（整体替换用）
 
     def show_sequence(self, layers: list[list[Path]]) -> None:
-        """layers[0] 为最底层；单层即普通序列，多层即同 ID 叠层合成。"""
-        self._clear()
+        """layers[0] 为最底层；单层即普通序列，多层即同 ID 叠层合成。
+
+        切换体验（M6）：**延迟清空 + 整体替换**——保留旧画面直到新序列
+        全部解码完成，避免「先清空再逐帧生长」的闪烁感。期间标题显示解码中。
+        """
+        self._stop_worker()
         if not layers or all(len(layer) == 0 for layer in layers):
+            self._clear_cells()
             self._title.setText("A · 序列帧网格（无帧）")
             return
-        self._title.setText("A · 序列帧网格 · 加载中…")
+        self._title.setText("A · 序列帧网格 · 解码中…")
+        self._pending = []
         self._worker = DecodeWorker(layers)
         self._worker.frame_ready.connect(self._on_frame)
         self._worker.finished.connect(self._on_done)
         self._worker.start()
 
-    def _clear(self) -> None:
+    def _stop_worker(self) -> None:
         if self._worker is not None and self._worker.isRunning():
             self._worker.quit()
             self._worker.wait()
         self._worker = None
+
+    def _clear_cells(self) -> None:
         for c in self._cells:
             self._flow.removeWidget(c)
             c.deleteLater()
         self._cells = []
 
     def _on_frame(self, idx: int, img, _label: str) -> None:
-        cell = _FrameCell(idx)
-        cell.set_pixmap(_img_to_pixmap(img))
-        cell.clicked.connect(lambda i=idx: self.frame_clicked.emit(i))
-        self._flow.addWidget(cell)
-        self._cells.append(cell)
+        # sender() 竞态防护：旧 worker 残留的 queued 信号直接忽略
+        if self._worker is None or self.sender() is not self._worker:
+            return
+        self._pending.append((idx, img))
 
     def _on_done(self, total: int) -> None:
+        if self._worker is None or self.sender() is not self._worker:
+            return
+        self._clear_cells()
+        for idx, img in self._pending:
+            cell = _FrameCell(idx)
+            cell.set_pixmap(_img_to_pixmap(img))
+            cell.clicked.connect(lambda i=idx: self.frame_clicked.emit(i))
+            self._flow.addWidget(cell)
+            self._cells.append(cell)
+        self._pending = []
         self._title.setText(f"A · 序列帧网格（{total} 帧 · 100% 原尺寸 · 并集 bbox · 自动换行）")
