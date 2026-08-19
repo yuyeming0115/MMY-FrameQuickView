@@ -20,6 +20,16 @@ from src.app import MainWindow                        # noqa: E402
 REAL_ROOT = Path(r"E:\XYJProject\美术资源\动画序列帧\角色输出图")
 
 
+def _wait_grid(win) -> None:
+    """等 GridView 后台解码/合成线程结束（offscreen 下事件驱动）。"""
+    for _ in range(400):
+        QApplication.processEvents()
+        w = win.grid_view._worker
+        if w is None or not w.isRunning():
+            break
+    QApplication.processEvents()
+
+
 def main() -> int:
     app = QApplication([])
     win = MainWindow()
@@ -38,9 +48,23 @@ def main() -> int:
         print(f"[状态栏] {win.statusBar().currentMessage()}")
         print(f"[匹配表] {win._namemap.path}")
         assert n_grp > 0, "部件列表为空"
-        # 按钮矩阵状态
         d, a = win.matrix.current()
         print(f"[按钮] 当前 方向={d} 动作={a}")
+
+        # ---- M2：组叠层 + 单部件网格渲染 ----
+        grp = win._result.groups[0]
+        win._on_group_selected(grp.res_id)
+        _wait_grid(win)
+        cells_grp = len(win.grid_view._cells)
+        print(f"[M2组] {grp.res_id}: grid cells={cells_grp}")
+        assert cells_grp > 0, "组模式网格为空"
+
+        part = win._result.parts[0]
+        win._on_part_selected(part)
+        _wait_grid(win)
+        cells_part = len(win.grid_view._cells)
+        print(f"[M2部件] {part.name}: grid cells={cells_part}")
+        assert cells_part > 0, "部件模式网格为空"
     else:
         print(f"[跳过] 真实目录不存在: {REAL_ROOT}")
 
