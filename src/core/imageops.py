@@ -45,8 +45,17 @@ def union_bbox(boxes: list[BBox | None]) -> BBox | None:
 
 
 def sequence_union_bbox(paths: list[Path]) -> BBox | None:
-    """全序列并集 bbox（注意：逐帧解码，调用方应放工作线程）。"""
-    return union_bbox([frame_bbox(p) for p in paths])
+    """全序列并集 bbox（注意：逐帧解码，调用方应放工作线程）。
+
+    任一帧文件在磁盘上不存在 / 损坏时跳过（返回 None），而非抛异常中断整个解码线程。
+    """
+    boxes: list[BBox | None] = []
+    for p in paths:
+        try:
+            boxes.append(frame_bbox(p))
+        except (FileNotFoundError, OSError, ValueError):
+            boxes.append(None)
+    return union_bbox(boxes)
 
 
 def load_cropped(path: Path, bbox: BBox | None) -> Image.Image:

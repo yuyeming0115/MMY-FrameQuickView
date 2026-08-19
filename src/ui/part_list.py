@@ -9,8 +9,8 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QBrush
 from PySide6.QtWidgets import (
-    QFrame, QLineEdit, QLabel, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
-    QAbstractItemView,
+    QFrame, QHBoxLayout, QLineEdit, QLabel, QPushButton, QTreeWidget, QTreeWidgetItem,
+    QVBoxLayout, QAbstractItemView, QHeaderView,
 )
 
 from ..core.namemap import NameMap
@@ -20,10 +20,16 @@ GOLD = QColor("#D4AF37")
 SUB = QColor("#96A1AD")
 TEXT = QColor("#E8E4D9")
 
+# 列宽不再硬编码：树第 0 列在 resizeEvent 里跟随容器宽度（容器宽 - 折叠按钮 28 - padding 12 ≈ - 40）。
+# 容器允许拖动范围 220~480，列宽自然跟动。
+LIST_COL_MIN_WIDTH = 160       # 列宽下限（防止 splitter 拖太小时列被压到 0）
+LIST_COL_PADDING = 40           # 容器宽 - 折叠按钮 28 - 内边距 12
+
 
 class PartList(QFrame):
     part_selected = Signal(object)  # PartData
     group_selected = Signal(str)    # res_id（点击组头时触发，用于同ID叠层显示）
+    pick_namemap = Signal()         # 点击「📖 选择匹配表」按钮时触发，app 打开文件选择
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -36,10 +42,41 @@ class PartList(QFrame):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
+        # 过滤框 + 折叠/展开 toggle
+        filter_row = QHBoxLayout()
+        filter_row.setContentsMargins(0, 0, 0, 0)
+        filter_row.setSpacing(4)
         self.filter_edit = QLineEdit()
         self.filter_edit.setPlaceholderText("🔍 过滤部件 / 中文名…")
         self.filter_edit.textChanged.connect(self._apply_filter)
-        layout.addWidget(self.filter_edit)
+        filter_row.addWidget(self.filter_edit, 1)
+
+        self.collapse_btn = QPushButton("▶")
+        self.collapse_btn.setFixedWidth(28)
+        self.collapse_btn.setToolTip("折叠 / 展开 所有 ID 组")
+        self.collapse_btn.setStyleSheet(
+            "QPushButton { background: #2A2E33; border: 1px solid #3A3F46; border-radius: 6px;"
+            " color: #96A1AD; padding: 4px 0; font-size: 13px; }"
+            "QPushButton:hover { border-color: #D4AF37; color: #D4AF37; }"
+        )
+        self.collapse_btn.clicked.connect(self._toggle_collapse)
+        filter_row.addWidget(self.collapse_btn)
+
+        # 「📖 选择匹配表」按钮：手动指定 ID-中文名映射 txt，
+        # 兜底自动发现失败 / QSettings 失效的情况，比顶部菜单更直观。
+        self.map_btn = QPushButton("📖")
+        self.map_btn.setFixedWidth(28)
+        self.map_btn.setToolTip("选择 ID-中文名匹配表（手动指定 txt）")
+        self.map_btn.setStyleSheet(
+            "QPushButton { background: #2A2E33; border: 1px solid #3A3F46; border-radius: 6px;"
+            " color: #96A1AD; padding: 4px 0; font-size: 13px; }"
+            "QPushButton:hover { border-color: #D4AF37; color: #D4AF37; }"
+        )
+        self.map_btn.clicked.connect(lambda: self.pick_namemap.emit())
+        filter_row.addWidget(self.map_btn)
+        layout.addLayout(filter_row)
+
+        self._all_expanded = False  # 默认折叠（▶ 状态）；rebuild 后所有 ID 组收起
 
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
@@ -48,14 +85,39 @@ class PartList(QFrame):
         self.tree.setEditTriggers(QAbstractItemView.EditKeyPressed | QAbstractItemView.SelectedClicked)
         self.tree.itemSelectionChanged.connect(self._on_select)
         self.tree.itemChanged.connect(self._on_item_changed)
+        # 滚动条按需出现；overlay 样式下隐藏时不占布局空间，避免切换条目时宽度回弹。
+        self.tree.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.tree.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.tree.setUniformRowHeights(True)        # 行高一致 = sizeHint 不抖
+        self.tree.setExpandsOnDoubleClick(False)
+        # 锁定第 0 列宽度 = 不再随「最长可见条目」自动 resize 导致侧栏扩缩。
+        header = self.tree.header()
+        header.setStretchLastSection(False)              # 关键：关闭末列自动拉伸，Fixed 才真正生效
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        # 初始化时按当前容器宽（此时 = 220，setMinimumWidth 触发）算一列宽，
+        # 后续真正拖 splitter 时由 resizeEvent 同步刷新。
+        header.resizeSection(0, max(LIST_COL_MIN_WIDTH, self.width() - LIST_COL_PADDING))
         layout.addWidget(self.tree, 1)
 
         self.count_label = QLabel("未加载")
         self.count_label.setStyleSheet("color: #96A1AD; font-size: 12px; padding: 2px 4px;")
         layout.addWidget(self.count_label)
 
-        self.setMinimumWidth(210)
-        self.setMaximumWidth(300)
+        # 左栏宽度允许 splitter 拖动：220~480 区间。
+        #   - setMinimumWidth(220) 防 splitter 拖太小看不到 ID；
+        #   - setMaximumWidth(480) 防左栏过大挤压右栏画布；
+        #   - 树内列宽由 resizeEvent 同步跟随容器宽 = self.width() - 40。
+        # 之前 setFixedWidth(220) 锁死导致长 ID+中文（如"50142004 · 月河郡主(琴)·发"）出省略号。
+        self.setMinimumWidth(220)
+        self.setMaximumWidth(480)
+
+    def resizeEvent(self, event) -> None:
+        """容器宽度变化（splitter 拖动）时，同步树第 0 列宽 = 容器宽 - 折叠按钮 28 - padding 12。"""
+        super().resizeEvent(event)
+        new_w = max(LIST_COL_MIN_WIDTH, self.width() - LIST_COL_PADDING)
+        header = self.tree.header()
+        if header.sectionSize(0) != new_w:
+            header.resizeSection(0, new_w)
 
     # ---------------- 数据 ----------------
     def set_namemap(self, namemap: NameMap) -> None:
@@ -116,7 +178,7 @@ class PartList(QFrame):
                     child.setForeground(0, QBrush(GOLD if pd.part else TEXT))
                     grp_item.addChild(child)
                     self._parts[str(pd.folder)] = pd
-                grp_item.setExpanded(True)
+                grp_item.setExpanded(False)   # 默认折叠：只显示 ID/角色 组头，点击 ▼ 展开
 
             n_issue = sum(1 for p in self._result.parts if p.has_issues)
             self.count_label.setText(
@@ -148,6 +210,16 @@ class PartList(QFrame):
                 child.setHidden(not hit)
                 visible_children += int(hit)
             grp_item.setHidden(bool(text) and not grp_hit and visible_children == 0)
+
+    def _toggle_collapse(self) -> None:
+        """一键折叠 / 展开所有 ID 组。"""
+        if self._all_expanded:
+            self.tree.collapseAll()
+            self.collapse_btn.setText("▶")
+        else:
+            self.tree.expandAll()
+            self.collapse_btn.setText("▼")
+        self._all_expanded = not self._all_expanded
 
     def _on_select(self) -> None:
         items = self.tree.selectedItems()

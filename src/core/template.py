@@ -21,6 +21,41 @@ class Template:
     layer_order: list[str] = field(default_factory=list)
     frame_pattern: str = r"^(\d{4})\.png$"
     extensions: list[str] = field(default_factory=lambda: [".png"])
+    # 角色类型 → 方向 → 该方向「应当存在」的动作列表（查漏补缺的基准）。
+    # 用于覆盖「主角 vs 伙伴/怪物/boss/npc/坐骑/翅膀」两套不同约定。
+    action_rules: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    # 匹配表中未标注类型时的默认角色类型。
+    default_character_type: str = "non_protagonist"
+
+    # 角色类型归一化：匹配表第3列 → action_rules 的 key。
+    # 主角类 → protagonist；伙伴/怪物/boss → non_protagonist；
+    # NPC → npc；翅膀 → wings；坐骑 → mount；未标注 → default_character_type。
+    CHAR_TYPE_ALIASES = {
+        "主角": "protagonist",
+        "protagonist": "protagonist",
+        "hero": "protagonist",
+        "player": "protagonist",
+        "伙伴": "non_protagonist",
+        "companion": "non_protagonist",
+        "怪物": "non_protagonist",
+        "monster": "non_protagonist",
+        "boss": "non_protagonist",
+        "npc": "npc",
+        "坐骑": "mount",
+        "mount": "mount",
+        "翅膀": "wings",
+        "wings": "wings",
+    }
+
+    def resolve_char_type(self, raw: str | None) -> str:
+        """把匹配表里的类型字段归一化为 action_rules 的 key。"""
+        if raw is None:
+            return self.default_character_type
+        return self.CHAR_TYPE_ALIASES.get(raw.strip().lower(), self.default_character_type)
+
+    def expected_actions(self, char_type: str, direction: str) -> list[str]:
+        """某角色类型在某方向「应当存在」的动作；方向/类型不在规则内返回空（不查漏）。"""
+        return list(self.action_rules.get(char_type, {}).get(direction, []))
 
     # ---------- 解析辅助 ----------
     def frame_regex(self) -> re.Pattern:
@@ -68,6 +103,8 @@ class Template:
             "layer_order": self.layer_order,
             "frame_pattern": self.frame_pattern,
             "extensions": self.extensions,
+            "action_rules": self.action_rules,
+            "default_character_type": self.default_character_type,
         }
 
     @classmethod
@@ -82,6 +119,8 @@ class Template:
             layer_order=list(data.get("layer_order", [])),
             frame_pattern=data.get("frame_pattern", r"^(\d{4})\.png$"),
             extensions=list(data.get("extensions", [".png"])),
+            action_rules=dict(data.get("action_rules", {})),
+            default_character_type=data.get("default_character_type", "non_protagonist"),
         )
 
 

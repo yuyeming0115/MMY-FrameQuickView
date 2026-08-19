@@ -31,6 +31,7 @@ class NameMap:
         self.path: Path | None = path
         self._names: dict[str, str] = {}        # key(文件夹名或纯ID) -> 名字
         self._part_cn: dict[str, str] = dict(PART_CN_DEFAULT)
+        self._types: dict[str, str] = {}         # 纯ID -> 角色类型(主角/怪物/...)
 
     # ---------------- 加载 ----------------
     def load(self, path: Path) -> None:
@@ -52,11 +53,16 @@ class NameMap:
             if name == PLACEHOLDER:
                 continue            # 待命名不算有效映射
             self._names[key] = name  # 重复 key 后出现者生效
-            # 第3列 = 部位中文名 → 回填 part_cn（从 50111100_hair 提取 hair）
-            if len(cols) >= 3 and "_" in key:
-                part = key.rsplit("_", 1)[-1]
-                if cols[2]:
-                    self._part_cn[part] = cols[2]
+            if len(cols) >= 3:
+                if "_" in key:
+                    # 部件行（50111100_hair）：第3列 = 部位中文名 → 回填 part_cn
+                    part = key.rsplit("_", 1)[-1]
+                    if cols[2]:
+                        self._part_cn[part] = cols[2]
+                else:
+                    # 纯 ID 行（502019）：第3列 = 角色类型（主角/怪物/...）
+                    if cols[2]:
+                        self._types[key] = cols[2]
 
     @staticmethod
     def _read_text(path: Path) -> str | None:
@@ -80,6 +86,10 @@ class NameMap:
         if part is None:
             return "整体"
         return self._part_cn.get(part, part)
+
+    def char_type(self, res_id: str) -> str | None:
+        """纯 ID 对应的角色类型（来自匹配表第3列）；未标注返回 None。"""
+        return self._types.get(res_id)
 
     def display(self, folder_name: str, res_id: str) -> str:
         """组头显示文本：有名字 → `502019 · 杜如晦`；无 → 原 ID。"""
@@ -147,14 +157,31 @@ class NameMap:
         return True
 
 
-def discover_map_file(folder: Path) -> Path | None:
-    """自动发现匹配表：在拖入目录及其父级找 *匹配表*.txt。"""
+def discover_map_file(folder: Path, last_known: Path | None = None) -> Path | None:
+    """自动发现匹配表：从拖入目录向上递归到盘根找 *匹配表*.txt，返回最近的命中。
+
+    资源目录往往很深（如 ``动画序列帧/角色输出图/50112101``），而匹配表放在
+    项目根（``动画序列帧/ID-角色-名字匹配表.txt``）。只查拖入目录+父级两层会
+    漏掉，因此这里一路向上递归；命中多个时取「离拖入目录最近」的那个。
+
+    ``last_known`` 为上次成功用过的匹配表路径，向上递归无果时作兜底。
+    """
     folder = Path(folder)
-    for base in (folder, folder.parent):
+    chain: list[Path] = []
+    p = folder
+    while True:
+        chain.append(p)
+        parent = p.parent
+        if parent == p:       # 已到盘根
+            break
+        p = parent
+    for base in chain:
         try:
             hits = sorted(base.glob("*匹配表*.txt"))
         except OSError:
             continue
         if hits:
             return hits[0]
+    if last_known is not None and Path(last_known).exists():
+        return Path(last_known)
     return None

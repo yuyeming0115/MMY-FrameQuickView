@@ -7,5 +7,43 @@
   "hierarchy": ["direction", "action"],
   "layer_order": ["shadow", "ride_back", "body", "hair", "weapon", "wings", "ride_front", "fills"],
   "frame_pattern": "^(\\d{4})\\.png$",
-  "extensions": [".png", ".webp"]
+  "extensions": [".png", ".webp"],
+  "default_character_type": "non_protagonist",
+  "action_rules": {
+    "protagonist": {
+      "E": ["idle", "attack", "run"],
+      "N": ["idle", "attack", "run"],
+      "S": ["idle", "attack", "run"],
+      "NW": ["idle", "run", "attack", "skill", "hurt", "block", "dead", "ride_idle", "ride_run"],
+      "SE": ["idle", "run", "attack", "skill", "hurt", "block", "dead", "ride_idle", "ride_run"]
+    },
+    "non_protagonist": {
+      "E": ["idle", "run"],
+      "N": ["idle", "run"],
+      "S": ["idle", "run"],
+      "NW": ["idle", "run", "attack", "skill", "hurt", "block", "dead"],
+      "SE": ["idle", "run", "attack", "skill", "hurt", "block", "dead"]
+    },
+    "npc": {
+      "E": ["idle", "run"],
+      "N": ["idle", "run"],
+      "S": ["idle", "run"],
+      "NW": ["idle", "run"],
+      "SE": ["idle", "run"]
+    },
+    "wings": {
+      "E": ["idle", "run"],
+      "N": ["idle", "run"],
+      "S": ["idle", "run"],
+      "NW": ["idle", "run"],
+      "SE": ["idle", "run"]
+    },
+    "mount": {
+      "E": ["ride_idle", "ride_run"],
+      "N": ["ride_idle", "ride_run"],
+      "S": ["ride_idle", "ride_run"],
+      "NW": ["ride_idle", "ride_run"],
+      "SE": ["ride_idle", "ride_run"]
+    }
+  }
 }
