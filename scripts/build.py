@@ -48,14 +48,14 @@ def main() -> int:
     run([pyinstaller, str(spec), "--clean", "--noconfirm"], PROJECT_ROOT)
 
     # 3. 复制产物 + README
-    exe_src = PROJECT_ROOT / "dist" / "MY-FrameQuickView.exe"
+    exe_src = PROJECT_ROOT / "dist" / "MMY-FrameQuickView.exe"
     if args.mode == "onedir":
-        exe_src = PROJECT_ROOT / "dist" / "MY-FrameQuickView" / "MY-FrameQuickView.exe"
+        exe_src = PROJECT_ROOT / "dist" / "MMY-FrameQuickView" / "MMY-FrameQuickView.exe"
     if not exe_src.exists():
         print(f"错误：未找到产物 {exe_src}", file=sys.stderr)
         return 1
 
-    shutil.copy2(exe_src, release_dir / "MY-FrameQuickView.exe")
+    shutil.copy2(exe_src, release_dir / "MMY-FrameQuickView.exe")
 
     readme = release_dir / "README.txt"
     readme.write_text(
@@ -63,7 +63,7 @@ def main() -> int:
 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 使用方式：
-1. 双击 MY-FrameQuickView.exe 启动
+1. 双击 MMY-FrameQuickView.exe 启动
 2. 把「角色资源父目录」或单个「部件文件夹」拖入上方拖拽区
 3. 左栏按 ID 分组，点击组头查看同 ID 叠层，点击部件查看单部件
 4. B 区下方切换方向 / 动作，播放 GIF 动画，勾选棋盘格检查 alpha 毛边
@@ -75,7 +75,7 @@ def main() -> int:
     )
 
     print(f"打包完成：{release_dir}")
-    print(f"  - {release_dir / 'MY-FrameQuickView.exe'}")
+    print(f"  - {release_dir / 'MMY-FrameQuickView.exe'}")
     print(f"  - {readme}")
     return 0
 

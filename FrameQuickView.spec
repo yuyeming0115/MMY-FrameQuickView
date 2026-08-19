@@ -12,7 +12,9 @@ from pathlib import Path
 
 project_root = Path(SPECPATH).resolve()
 templates_dir = project_root / "templates"
+assets_dir = project_root / "assets"
 src_dir = project_root / "src"
+icon_path = project_root / "assets" / "icon.ico"
 
 # 自动收集 src 下所有子模块，避免 hidden import 遗漏
 hidden = []
@@ -30,7 +32,10 @@ a = Analysis(
     [str(project_root / "src" / "main.py")],
     pathex=[str(project_root)],
     binaries=[],
-    datas=[(str(templates_dir), "templates")],
+    datas=[
+        (str(templates_dir), "templates"),
+        (str(assets_dir), "assets"),
+    ],
     hiddenimports=hidden,
     hookspath=[],
     hooksconfig={},
@@ -51,7 +56,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="MY-FrameQuickView",
+    name="MMY-FrameQuickView",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -64,4 +69,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(icon_path) if icon_path.exists() else None,
 )
