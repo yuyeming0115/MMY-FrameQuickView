@@ -3,6 +3,10 @@ __pycache__/
 *.pyc
 build/
 dist/
-*.spec
 releases/
-.workbuddy/
+# 保留打包配置，但忽略构建产物
+!FrameQuickView.spec
+!scripts/build.py
+# .workbuddy 仅保留项目记忆到 git
+.workbuddy/*
+!.workbuddy/memory/

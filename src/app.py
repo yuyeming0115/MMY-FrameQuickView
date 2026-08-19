@@ -17,6 +17,7 @@ from .ui.button_matrix import ButtonMatrix
 from .ui.drop_zone import DropZone
 from .ui.grid_view import GridView
 from .ui.part_list import PartList
+from .ui.template_editor import TemplateEditorDialog
 
 APP_STYLE = """
 QMainWindow, QWidget { background: #1E2023; color: #E8E4D9; font-size: 14px; }
@@ -77,10 +78,12 @@ class MainWindow(QMainWindow):
         self.tpl_combo.addItems([t.name for t in self._templates])
         self.tpl_combo.currentIndexChanged.connect(self._on_template_changed)
         top.addWidget(self.tpl_combo)
-        for text in ("✎ 编辑", "＋ 新建"):
-            btn = QPushButton(text)
-            btn.clicked.connect(self._todo_template_editor)
-            top.addWidget(btn)
+        self.edit_btn = QPushButton("✎ 编辑")
+        self.edit_btn.clicked.connect(self._on_edit_template)
+        top.addWidget(self.edit_btn)
+        self.new_btn = QPushButton("＋ 新建")
+        self.new_btn.clicked.connect(self._on_new_template)
+        top.addWidget(self.new_btn)
         root.addLayout(top)
 
         # 拖拽区
@@ -287,5 +290,32 @@ class MainWindow(QMainWindow):
             if self._result and self._result.root:
                 self._on_folder_dropped(self._result.root)
 
-    def _todo_template_editor(self) -> None:
-        QMessageBox.information(self, "模板编辑器", "模板编辑器将在 M4 实现。\n当前可直接编辑 templates/*.json。")
+    def _on_edit_template(self) -> None:
+        if self._tpl is None:
+            QMessageBox.information(self, "编辑模板", "当前没有可编辑的模板，请先新建。")
+            return
+        if TemplateEditorDialog.edit(self._tpl, self):
+            self._reload_templates()
+
+    def _on_new_template(self) -> None:
+        if TemplateEditorDialog.create_new(self):
+            self._reload_templates()
+
+    def _reload_templates(self) -> None:
+        """模板保存后重新加载列表，并刷新当前扫描。"""
+        self._templates = load_templates()
+        self.tpl_combo.blockSignals(True)
+        self.tpl_combo.clear()
+        self.tpl_combo.addItems([t.name for t in self._templates])
+        # 尽量保持当前模板选中
+        names = [t.name for t in self._templates]
+        if self._tpl and self._tpl.name in names:
+            self.tpl_combo.setCurrentIndex(names.index(self._tpl.name))
+        elif self._templates:
+            self.tpl_combo.setCurrentIndex(0)
+        self.tpl_combo.blockSignals(False)
+        self._tpl = self._templates[self.tpl_combo.currentIndex()] if self._templates else None
+        if self._tpl:
+            self.matrix.set_template(self._tpl)
+        if self._result and self._result.root and self._tpl:
+            self._on_folder_dropped(self._result.root)
