@@ -85,6 +85,13 @@ class AnimView(QFrame):
         self._canvas = _AnimCanvas()
         layout.addWidget(self._canvas, 1)
 
+        # 方向/动作按钮矩阵占位（由 app.py 注入）
+        self._matrix_container = QWidget()
+        mcl = QVBoxLayout(self._matrix_container)
+        mcl.setContentsMargins(0, 0, 0, 0)
+        mcl.setSpacing(4)
+        layout.addWidget(self._matrix_container)
+
         # 控制栏
         bar = QHBoxLayout()
         bar.setSpacing(8)
@@ -138,6 +145,15 @@ class AnimView(QFrame):
         self._on_fps_changed(12)
 
     # ---------------- 公共 API ----------------
+    def set_matrix_widget(self, widget: QWidget) -> None:
+        """注入方向/动作按钮矩阵，显示在 B 区画布与控制栏之间。"""
+        layout = self._matrix_container.layout()
+        while layout.count():
+            item = layout.takeAt(0)
+            if item.widget():
+                item.widget().setParent(None)
+        layout.addWidget(widget)
+
     def show_sequence(self, layers: list[list[Path]], start_idx: int = 0) -> None:
         """layers[0] 为最底层；多层即同 ID 叠层合成。"""
         self._stop_worker()
