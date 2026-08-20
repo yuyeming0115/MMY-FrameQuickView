@@ -7,10 +7,10 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QBrush
+from PySide6.QtGui import QColor, QBrush, QGuiApplication
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLineEdit, QLabel, QPushButton, QTreeWidget, QTreeWidgetItem,
-    QVBoxLayout, QAbstractItemView, QHeaderView,
+    QFrame, QHBoxLayout, QLineEdit, QLabel, QMenu, QPushButton, QTreeWidget,
+    QTreeWidgetItem, QVBoxLayout, QAbstractItemView, QHeaderView,
 )
 
 from .hover_scroll import enable_hover_scroll
@@ -93,6 +93,9 @@ class PartList(QFrame):
         enable_hover_scroll(self.tree)  # 鼠标离开自动隐藏滚动条
         self.tree.setUniformRowHeights(True)        # 行高一致 = sizeHint 不抖
         self.tree.setExpandsOnDoubleClick(False)
+        # 右键菜单：复制 ID / ID·中文名 / 文件夹路径
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._on_context_menu)
         # 锁定第 0 列宽度 = 不再随「最长可见条目」自动 resize 导致侧栏扩缩。
         header = self.tree.header()
         header.setStretchLastSection(False)              # 关键：关闭末列自动拉伸，Fixed 才真正生效
@@ -265,3 +268,53 @@ class PartList(QFrame):
         if new_name:
             self._namemap.set_name(res_id, new_name)
         self.refresh_names()
+
+    # ---------------- 右键菜单 ----------------
+    def _on_context_menu(self, pos) -> None:
+        item = self.tree.itemAt(pos)
+        if item is None:
+            return
+        key = item.data(0, Qt.UserRole)
+        if not key:
+            return
+
+        res_id: str | None = None
+        name: str | None = None
+        folder_path: str | None = None
+
+        if key.startswith("GRP:"):
+            # 组头：res_id 来自 key，中文名查匹配表
+            res_id = key[4:]
+            if self._namemap and self._result:
+                for grp in self._result.groups:
+                    if grp.res_id == res_id and grp.parts:
+                        name = self._namemap.lookup(grp.parts[0].name, grp.res_id)
+                        break
+        else:
+            # 子项：key = 文件夹路径
+            pd = self._parts.get(key)
+            if pd is None:
+                return
+            res_id = pd.res_id
+            folder_path = str(pd.folder)
+            if self._namemap:
+                name = self._namemap.lookup(pd.name, pd.res_id)
+
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background: #2A2E33; border: 1px solid #3A3F46; padding: 4px; }"
+            "QMenu::item { color: #E8E4D9; padding: 6px 18px; border-radius: 3px; }"
+            "QMenu::item:selected { background: #3A3F46; color: #D4AF37; }"
+        )
+        menu.addAction(f"复制 ID（{res_id}）", lambda: self._copy_text(res_id or ""))
+        if name:
+            full = f"{res_id} · {name}"
+            menu.addAction(f"复制 ID · 中文名（{full}）", lambda: self._copy_text(full))
+        if folder_path:
+            menu.addSeparator()
+            menu.addAction("复制文件夹路径", lambda: self._copy_text(folder_path))
+        menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    @staticmethod
+    def _copy_text(text: str) -> None:
+        QGuiApplication.clipboard().setText(text)
