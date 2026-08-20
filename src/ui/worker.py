@@ -42,6 +42,15 @@ class DecodeWorker(QThread):
                 for layer in self._layers
             ]
             img = composite_layers(per, bbox)
-            label = self._labels[i] if self._labels and i < len(self._labels) else f"{i + 1:04d}"
+            # 默认 label：取该帧首个真实存在的文件名（去后缀），
+            # 反映"同方向跨动作连续编号"的真实帧号（如 attack=0017-0024、skill=0025-0032），
+            # 而不是从 0001 重启的序号。
+            if self._labels and i < len(self._labels):
+                label = self._labels[i]
+            else:
+                label = next(
+                    (Path(p).stem for p in per if p is not None),
+                    f"{i + 1:04d}",
+                )
             self.frame_ready.emit(i, img, label)
         self.finished.emit(n)
