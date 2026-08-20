@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -111,13 +112,48 @@ def _scan_action_folder(action_dir: Path, tpl: Template) -> ActionData:
     return ActionData(frames=[p for _, p in pairs], numbers=numbers, gaps=gaps)
 
 
+def _looks_like_part_folder(folder: Path, tpl: Template) -> bool:
+    """结构检测兜底：folder 子目录中有 ≥2 个是模板已知 direction/action。
+
+    用于识别 parse_folder_name 无法命中的整体资源（如新工程的 503026_神龙，
+    命名为 {id}_{中文名}，既非 {id}_{part} 也非纯 ID）。靠实际子目录结构
+    判定，避免误把分类文件夹（如 504004_黑龙王，其下是 Render_Output）当资源。
+    """
+    try:
+        children = [c.name for c in folder.iterdir() if c.is_dir()]
+    except OSError:
+        return False
+    known = set(tpl.directions) | set(tpl.actions)
+    hits = sum(1 for name in children if name in known)
+    return hits >= 2
+
+
+def _parse_folder_or_struct(folder: Path, tpl: Template) -> tuple[str, str | None] | None:
+    """先按名字解析，失败时用子目录结构兜底（整体资源）。
+
+    - 名字命中 {id}_{part} 或纯 ID → 直接返回
+    - 名字不命中但子目录结构像部件 → 视为整体资源，res_id 取文件夹名的数字前缀
+      （如 503026_神龙 → res_id=503026）；无数字前缀则用整个文件夹名
+    - 都不命中 → 返回 None（交给上层继续递归）
+    """
+    parsed = tpl.parse_folder_name(folder.name)
+    if parsed is not None:
+        return parsed
+    if _looks_like_part_folder(folder, tpl):
+        m = re.match(r"^(\d+)", folder.name)
+        res_id = m.group(1) if m else folder.name
+        return res_id, None
+    return None
+
+
+
 def scan_part(folder: Path, tpl: Template, char_type_of=None) -> PartData | None:
     """扫描单个部件文件夹。folder_pattern 不匹配或内部无有效结构时返回 None。
 
     char_type_of: 可选 Callable[res_id] -> str|None，返回匹配表中的原始类型字段；
                   内部的角色类型归一化交给 tpl.resolve_char_type。
     """
-    parsed = tpl.parse_folder_name(folder.name)
+    parsed = _parse_folder_or_struct(folder, tpl)
     if parsed is None:
         return None
     res_id, part = parsed
@@ -249,7 +285,7 @@ def _find_part_folders(root: Path, tpl: Template, max_depth: int) -> list[Path]:
         for c in children:
             if not c.is_dir():
                 continue
-            if tpl.parse_folder_name(c.name) is not None:
+            if _parse_folder_or_struct(c, tpl) is not None:
                 found.append(c)                 # 部件文件夹：收集，不继续下钻
             else:
                 stack.append((c, depth + 1))    # 角色/分类文件夹：继续递归
