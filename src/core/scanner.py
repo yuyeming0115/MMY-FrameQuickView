@@ -43,6 +43,8 @@ class PartData:
     missing_directions: list[str] = field(default_factory=list)
     # 方向存在但「约定动作」缺失: {direction: [action, ...]}（按角色类型+方向基准）
     missing_actions: dict[str, list[str]] = field(default_factory=dict)
+    # 模板外多余动作: {direction: [action, ...]}（如旧工程的 catch/sprint）
+    extra_actions: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def name(self) -> str:
@@ -50,7 +52,7 @@ class PartData:
 
     @property
     def has_issues(self) -> bool:
-        if self.missing_directions or self.missing_actions:
+        if self.missing_directions or self.missing_actions or self.extra_actions:
             return True
         return any(not ad.continuous for d in self.matrix.values() for ad in d.values())
 
@@ -76,10 +78,12 @@ class IdGroup:
     effective_type: str = ""               # 查漏实际使用的类型（覆盖 wings/mount/npc）
     missing_directions: list[str] = field(default_factory=list)
     missing_actions: dict[str, list[str]] = field(default_factory=dict)
+    # 模板外多余动作（组内并集）: {direction: [action, ...]}
+    extra_actions: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def has_issues(self) -> bool:
-        if self.pairing_issues or self.missing_directions or self.missing_actions:
+        if self.pairing_issues or self.missing_directions or self.missing_actions or self.extra_actions:
             return True
         return any(p.has_issues for p in self.parts)
 
@@ -187,6 +191,27 @@ def scan_part(folder: Path, tpl: Template, char_type_of=None) -> PartData | None
     if first != "direction":
         matrix = _transpose(matrix)
 
+    # 检测模板外多余动作：遍历各方向实际子目录，不在 tpl.actions 但有有效帧的
+    known_actions = set(tpl.actions)
+    extra_actions: dict[str, list[str]] = {}
+    for d in matrix:
+        dir_path = folder / d
+        if not dir_path.is_dir():
+            continue
+        try:
+            children = [c for c in dir_path.iterdir() if c.is_dir()]
+        except OSError:
+            continue
+        extras: list[str] = []
+        for c in children:
+            if c.name in known_actions:
+                continue
+            ad = _scan_action_folder(c, tpl)
+            if ad.count > 0:
+                extras.append(c.name)
+        if extras:
+            extra_actions[d] = extras
+
     missing_directions = [d for d in tpl.directions if d not in matrix]
     missing_actions: dict[str, list[str]] = {}
     # shadow/fills 是配套部件（影子/补丁），动作跟随主体，不单独查漏。
@@ -221,6 +246,7 @@ def scan_part(folder: Path, tpl: Template, char_type_of=None) -> PartData | None
         folder=folder, res_id=res_id, part=part, matrix=matrix,
         character_type=char_type, effective_type=part_type,
         missing_directions=missing_directions, missing_actions=missing_actions,
+        extra_actions=extra_actions,
     )
 
 
@@ -340,6 +366,14 @@ def _group_parts(parts: list[PartData], tpl: Template, char_type_of=None) -> lis
             miss = [a for a in expected if a not in owned_per_dir.get(d, set())]
             if miss:
                 grp.missing_actions[d] = miss
+        # 组级多余动作：组内各部件 extra_actions 的并集
+        grp.extra_actions = {}
+        extra_per_dir: dict[str, set[str]] = {}
+        for p in members:
+            for d, acts in p.extra_actions.items():
+                extra_per_dir.setdefault(d, set()).update(acts)
+        for d, acts in extra_per_dir.items():
+            grp.extra_actions[d] = sorted(acts)
         if len(members) > 1:
             grp.pairing_issues = _check_pairing(members)
         groups.append(grp)

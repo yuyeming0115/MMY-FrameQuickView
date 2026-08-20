@@ -473,11 +473,15 @@ class MainWindow(QMainWindow):
                 segs.append("⚠ 缺方向: " + ", ".join(self._part.missing_directions))
             if self._part.missing_actions:
                 segs.append("⚠ 缺动作 " + self._missing_actions_text(self._part.missing_actions))
+            if self._part.extra_actions:
+                segs.append("⚠ 多余动作 " + self._extra_actions_text(self._part.extra_actions))
         elif self._group is not None:
             if self._group.missing_directions:
                 segs.append("⚠ 缺方向: " + ", ".join(self._group.missing_directions))
             if self._group.missing_actions:
                 segs.append("⚠ 缺动作 " + self._missing_actions_text(self._group.missing_actions))
+            if self._group.extra_actions:
+                segs.append("⚠ 多余动作 " + self._extra_actions_text(self._group.extra_actions))
             if self._group.pairing_issues:
                 segs.append("⚠ 配套: " + "；".join(self._group.pairing_issues[:2]))
         self.statusBar().showMessage("　·　".join(segs))
@@ -487,6 +491,12 @@ class MainWindow(QMainWindow):
         order = [d for d in (self._tpl.directions if self._tpl else []) if d in missing] \
             or sorted(missing.keys())
         return "；".join(f"{d}: " + ", ".join(missing[d]) for d in order)
+
+    def _extra_actions_text(self, extra: dict[str, list[str]]) -> str:
+        """按方向顺序拼接 `方向: 多余动作…`；方向顺序优先取模板 directions。"""
+        order = [d for d in (self._tpl.directions if self._tpl else []) if d in extra] \
+            or sorted(extra.keys())
+        return "；".join(f"{d}: " + ", ".join(extra[d]) for d in order)
 
     def _on_template_changed(self, index: int) -> None:
         if 0 <= index < len(self._templates):
