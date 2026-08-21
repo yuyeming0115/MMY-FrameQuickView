@@ -39,6 +39,7 @@ class PartList(QFrame):
         self._namemap: NameMap | None = None
         self._result: ScanResult | None = None
         self._loading = False                    # 防止 itemChanged 递归
+        self._fills_check = True                 # fills 警告检测开关（关闭=不显示 🟠）
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -129,6 +130,52 @@ class PartList(QFrame):
     def set_namemap(self, namemap: NameMap) -> None:
         self._namemap = namemap
 
+    def set_fills_check(self, enabled: bool) -> None:
+        """fills 警告检测开关：关闭后左栏不再显示 🟠 橙点（🔴 红点缺漏不受影响）。
+
+        轻量路径：只更新现有条目的标记文本，不重建树——重建会触发选择变化，
+        导致 A/B 区重新解码（资源多时明显卡顿）。
+        """
+        if self._fills_check == enabled:
+            return
+        self._fills_check = enabled
+        self._refresh_dots()
+
+    def _refresh_dots(self) -> None:
+        """遍历现有树条目，仅更新 🔴/🟠 标记（不重建、不触发选择变化）。"""
+        if self._result is None:
+            return
+        grp_by_id = {g.res_id: g for g in self._result.groups}
+        self._loading = True   # 防 setText 触发 itemChanged 走改名回写逻辑
+        try:
+            for i in range(self.tree.topLevelItemCount()):
+                grp_item = self.tree.topLevelItem(i)
+                key = grp_item.data(0, Qt.UserRole) or ""
+                if not key.startswith("GRP:"):
+                    continue
+                grp = grp_by_id.get(key[4:])
+                if grp is None:
+                    continue
+                text = grp_item.text(0).replace("  🔴", "").replace("  🟠", "")
+                if grp.has_issues:
+                    text += "  🔴"
+                elif self._fills_check and grp.has_warnings:
+                    text += "  🟠"
+                grp_item.setText(0, text)
+                for j in range(grp_item.childCount()):
+                    child = grp_item.child(j)
+                    pd = self._parts.get(child.data(0, Qt.UserRole))
+                    if pd is None:
+                        continue
+                    ctext = child.text(0).replace("  🔴", "").replace("  🟠", "")
+                    if pd.has_issues:
+                        ctext += "  🔴"
+                    elif self._fills_check and pd.has_warnings:
+                        ctext += "  🟠"
+                    child.setText(0, ctext)
+        finally:
+            self._loading = False
+
     def load_result(self, result: ScanResult) -> None:
         self._result = result
         self._rebuild()
@@ -165,7 +212,7 @@ class PartList(QFrame):
                     header = self._namemap.display(first.name, grp.res_id)
                 if grp.has_issues:
                     header += "  🔴"
-                elif grp.has_warnings:
+                elif self._fills_check and grp.has_warnings:
                     header += "  🟠"
                 grp_item = QTreeWidgetItem([header])
                 grp_item.setForeground(0, QBrush(SUB))
@@ -180,7 +227,7 @@ class PartList(QFrame):
                         label = f"{label} · {self._namemap.part_cn(pd.part)}"
                     if pd.has_issues:
                         label += "  🔴"
-                    elif pd.has_warnings:
+                    elif self._fills_check and pd.has_warnings:
                         label += "  🟠"
                     child = QTreeWidgetItem([label])
                     child.setData(0, Qt.UserRole, str(pd.folder))

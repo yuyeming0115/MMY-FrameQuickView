@@ -23,11 +23,11 @@ import math
 import numpy as np
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, Signal, QPointF, QRectF
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal, QPointF, QRectF
 from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QSlider,
-    QStackedLayout, QVBoxLayout, QWidget,
+    QAbstractScrollArea, QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton,
+    QScrollArea, QSizePolicy, QSlider, QStackedLayout, QVBoxLayout, QWidget,
 )
 
 from .hover_scroll import enable_hover_scroll
@@ -307,6 +307,91 @@ class _AnimCanvas(QLabel):
             painter.drawText(rect, Qt.AlignCenter, d)
 
 
+class PartToggles(QFrame):
+    """B 区右侧悬浮的逐部件显隐 toggle 列表（组视图）。
+
+    每部件一行（部件名 + 勾选态），点击某行切换该层显隐；按 layer_order
+    从底到顶排列。默认全部可见，发出的 toggled(part, visible) 由上层负责过滤。
+
+    按钮列表放在滚动区内：部件多 / B 区较矮时滚动而非裁剪或挤压；
+    高度上限由 AnimView._reposition_toggles 按宿主可用高度动态设置。
+    """
+
+    toggled = Signal(str, bool)   # (part 名, 是否可见)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(
+            "PartToggles, PartToggles QFrame, PartToggles QWidget { background: rgba(30,32,35,210); border: none; }"
+        )
+        self.setAutoFillBackground(False)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 6, 8, 6)
+        outer.setSpacing(4)
+
+        title = QLabel("显示层")
+        title.setStyleSheet("color: #96A1AD; font-size: 11px; letter-spacing: 1px;")
+        outer.addWidget(title)
+
+        # 按钮列表滚动区：高度受限时出现滚动条，按钮不再溢出裁剪
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)
+        self._scroll.setStyleSheet(
+            "QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }"
+        )
+        enable_hover_scroll(self._scroll)
+        list_host = QWidget()
+        list_host.setStyleSheet("background: transparent;")
+        self._list = QVBoxLayout(list_host)
+        self._list.setContentsMargins(0, 0, 0, 0)
+        self._list.setSpacing(4)
+        self._list.addStretch(1)          # 按钮顶部对齐，余量留白
+        self._scroll.setWidget(list_host)
+        outer.addWidget(self._scroll, 1)
+
+        self._items: list[tuple[str, QPushButton]] = []
+        self._visible: dict[str, bool] = {}
+
+    def set_parts(self, parts: dict[str, str], hidden: set[str]) -> None:
+        """parts = {part 名: 中文名}；hidden = 当前应隐藏的 part 集合。
+
+        清旧按钮时先 hide 再延迟销毁：removeWidget 只解除布局管理，控件
+        仍原地绘制（deleteLater 要等事件循环），快速切换组时新旧按钮会层叠。
+        """
+        for _, btn in self._items:
+            self._list.removeWidget(btn)
+            btn.hide()
+            btn.deleteLater()
+        self._items.clear()
+        self._visible.clear()
+
+        for part, cn in parts.items():
+            is_hidden = part in hidden
+            btn = QPushButton(f"{'☑' if not is_hidden else '☐'} {cn or part}")
+            btn.setCheckable(True)
+            btn.setChecked(not is_hidden)
+            btn.setFixedHeight(24)
+            btn.setStyleSheet(
+                "QPushButton { background: #2A2E33; border: 1px solid #3A3F46; border-radius: 4px;"
+                " color: #96A1AD; padding: 2px 8px; font-size: 12px; text-align: left; }"
+                "QPushButton:checked { color: #D4AF37; border-color: #D4AF37; }"
+                "QPushButton:hover { border-color: #D4AF37; }"
+            )
+            btn.clicked.connect(lambda _, p=part, b=btn: self._on_clicked(p, b))
+            self._list.addWidget(btn)
+            self._items.append((part, btn))
+            self._visible[part] = not is_hidden
+
+    def _on_clicked(self, part: str, btn: QPushButton) -> None:
+        visible = btn.isChecked()
+        self._visible[part] = visible
+        btn.setText(f"{'☑' if visible else '☐'} " + btn.text().split(" ", 1)[-1])
+        self.toggled.emit(part, visible)
+
+
 class AnimView(QFrame):
     frame_clicked = Signal(int)  # B 区点击当前帧时发出（与 A 区保持一致）
     direction_overlay_clicked = Signal(str)  # 画布内点击/拖拽某方向热区时发出（等同按钮矩阵的方向点击）
@@ -324,6 +409,7 @@ class AnimView(QFrame):
 
         # 叠加容器：QStackedLayout(StackAll) 让 canvas 铺满，按钮矩阵浮于其左上
         stack_host = QWidget()
+        self._stack_host = stack_host
         stack_host.setStyleSheet("background: transparent;")
         stack = QStackedLayout(stack_host)
         stack.setStackingMode(QStackedLayout.StackAll)
@@ -359,6 +445,14 @@ class AnimView(QFrame):
         stack.addWidget(self._matrix_container)
         # 按钮矩阵在上层，透出下层 canvas
         self._matrix_container.raise_()
+
+        # 上层：右侧逐部件显隐 toggle（组视图用）。
+        # ⚠ 不能放进 stack：StackAll 模式下每个页都铺满全区，透明容器会整面
+        # 拦截鼠标事件（左侧按钮矩阵/画布 hover 全部失效）。改为 stack_host 的
+        # 手动定位悬浮子控件——不进布局，只占自身尺寸，其余区域点击不受影响。
+        self._toggles = PartToggles(stack_host)
+        self._toggles.hide()
+        stack_host.installEventFilter(self)
 
         outer.addWidget(stack_host, 1)
 
@@ -440,6 +534,46 @@ class AnimView(QFrame):
     def set_current_dir(self, direction: str | None) -> None:
         """同步当前选中方向（overlay 金色高亮）。"""
         self._canvas.set_current_dir(direction)
+
+    def show_part_toggles(self, parts: dict[str, str], hidden: set[str]) -> None:
+        """组视图：显示右侧逐部件显隐 toggle。parts = {part 名: 中文名}。"""
+        self._toggles.set_parts(parts, hidden)
+        self._toggles.show()
+        self._reposition_toggles()
+
+    def hide_part_toggles(self) -> None:
+        """单部件视图/无选中：隐藏右侧 toggle 列表。"""
+        self._toggles.hide()
+
+    def _reposition_toggles(self) -> None:
+        """显示层靠右垂直居中；高度超出宿主时限制并交由内部滚动。"""
+        host, tog = self._stack_host, self._toggles
+        btns = [b for _, b in tog._items]
+        n = len(btns)
+        if n:
+            # 尺寸手动按内容计算：QScrollArea 的 sizeHint 在按钮刚加入时
+            # 不会自动失效（拿到的是过期小尺寸），不能依赖 adjustSize。
+            w = max(b.sizeHint().width() for b in btns) + 16 + 10  # 边距 + 滚动条余量
+            h = 6 + 18 + 4 + n * 24 + (n - 1) * 4 + 6             # 标题 + 按钮行
+            tog.setFixedSize(w, h)
+        # 高度上限：超出宿主则收窄到宿主高度，内部滚动接管
+        max_h = host.height() - 8
+        if n and tog.height() > max_h and max_h > 80:
+            tog.setMaximumHeight(max_h)
+        x = max(LEFT_PANEL_WIDTH + 8, host.width() - tog.width() - 8)
+        y = max(4, (host.height() - tog.height()) // 2)
+        tog.move(x, y)
+        tog.raise_()
+
+    def eventFilter(self, obj, event) -> bool:
+        """stack_host 尺寸变化（splitter 拖动/窗口缩放）时同步 toggle 位置。"""
+        if obj is self._stack_host and event.type() == QEvent.Type.Resize:
+            self._reposition_toggles()
+        return super().eventFilter(obj, event)
+
+    def part_toggles_signal(self):
+        """暴露 toggled 信号供上层连接。"""
+        return self._toggles.toggled
 
     def show_sequence(self, layers: list[list[Path]], start_idx: int = 0) -> None:
         """layers[0] 为最底层；多层即同 ID 叠层合成。

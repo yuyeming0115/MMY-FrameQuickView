@@ -71,6 +71,10 @@ class MainWindow(QMainWindow):
         self._settings = QSettings("MMY", "FrameQuickView")
         self._last_folder: Path | None = None      # 最近一次拖入的目录
         self._last_map_file: Path | None = None    # 最近一次成功加载的匹配表
+        # 组视图右侧 toggle 中用户隐藏的部件层（QSettings 记忆）
+        self._hidden_parts: set[str] = set(self._settings.value("layering/hidden_parts", [], type=list))
+        # fills 警告检测开关：NPC/翅膀/主角/坐骑等无 fills 部件的资源可关闭降噪（QSettings 记忆）
+        self._fills_check = bool(self._settings.value("checks/fills", True, type=bool))
         # 重启兜底：上次的匹配表/拖入目录如果还存在，自动恢复
         saved = self._load_saved_map_path()
         if saved is not None and saved.exists():
@@ -80,6 +84,7 @@ class MainWindow(QMainWindow):
             self._last_folder = Path(saved_folder)
 
         self._build_ui()
+        self.part_list.set_fills_check(self._fills_check)   # 启动时同步左栏橙点开关
         if self._tpl:
             self.matrix.set_template(self._tpl)
             self.anim_view.set_available_dirs(set(self._tpl.directions))
@@ -118,6 +123,20 @@ class MainWindow(QMainWindow):
         self.new_btn = QPushButton("＋ 新建")
         self.new_btn.clicked.connect(self._on_new_template)
         top.addWidget(self.new_btn)
+        # fills 警告检测开关：无 fills 部件的资源（NPC/翅膀/主角/坐骑等）可关闭降噪
+        self.fills_btn = QPushButton("🟠 fills 检测")
+        self.fills_btn.setCheckable(True)
+        self.fills_btn.setChecked(self._fills_check)
+        self.fills_btn.setToolTip(
+            "fills 部件缺漏警示开关：\n"
+            "开启 = 缺 fills 时左栏橙点 + 状态栏橙色提示\n"
+            "关闭 = 不再提示（无 fills 部件的资源建议关闭）"
+        )
+        self.fills_btn.setStyleSheet(
+            "QPushButton:checked { color: #E8A33D; border-color: #E8A33D; }"
+        )
+        self.fills_btn.toggled.connect(self._on_fills_check_toggled)
+        top.addWidget(self.fills_btn)
         root.addLayout(top)
 
         # 主体：左栏部件列表 | 右侧（按钮矩阵 + A/B 双区）
@@ -152,6 +171,7 @@ class MainWindow(QMainWindow):
         self.matrix.overlay_toggled.connect(self.anim_view.set_dir_overlay_enabled)
         self.anim_view.direction_overlay_clicked.connect(self._on_direction_selected)
         self.anim_view.set_matrix_widget(self.matrix)
+        self.anim_view.part_toggles_signal().connect(self._on_part_toggled)
         panes.addWidget(self.grid_view)
         panes.addWidget(self.anim_view)
         panes.setStretchFactor(0, 5)
@@ -191,6 +211,7 @@ class MainWindow(QMainWindow):
             self.part_list._select_by_key(saved_sel)
         self._group = None
         self._part = None
+        self._hidden_parts = set(self._settings.value("layering/hidden_parts", [], type=list))
         if not self._result.parts:
             self.statusBar().showMessage(
                 f"ℹ 未识别到符合模板的部件文件夹（忽略 {len(self._result.ignored)} 项）"
@@ -338,6 +359,7 @@ class MainWindow(QMainWindow):
     def _on_part_selected(self, part: PartData) -> None:
         self._part = part
         self._group = None
+        self.anim_view.hide_part_toggles()
         self._update_matrix(None, None)
         self._after_matrix_change()
 
@@ -349,8 +371,29 @@ class MainWindow(QMainWindow):
             return
         self._group = grp
         self._part = None
+        # 右侧逐部件显隐 toggle（按 layer_order 从底到顶给中文名）
+        parts = {p.part or p.name: (self._namemap.part_cn(p.part) if self._namemap else p.part)
+                 for p in grp.parts}
+        self.anim_view.show_part_toggles(parts, self._hidden_parts)
         self._update_matrix(None, None)
         self._after_matrix_change()
+
+    def _on_part_toggled(self, part: str, visible: bool) -> None:
+        if visible:
+            self._hidden_parts.discard(part)
+        else:
+            self._hidden_parts.add(part)
+        self._settings.setValue("layering/hidden_parts", sorted(self._hidden_parts))
+        self._settings.sync()
+        self._after_matrix_change()
+
+    def _on_fills_check_toggled(self, checked: bool) -> None:
+        """fills 警告检测开关：即时刷新左栏橙点与状态栏（QSettings 记忆）。"""
+        self._fills_check = checked
+        self._settings.setValue("checks/fills", checked)
+        self._settings.sync()
+        self.part_list.set_fills_check(checked)
+        self._refresh_status()
 
     def _on_direction_selected(self, direction: str) -> None:
         # 切换方向时保持当前动作（该动作在新方向缺失时由 show_part/show_group 兜底）
@@ -431,8 +474,12 @@ class MainWindow(QMainWindow):
         if self._part is not None:
             ad = self._part.action_data(direction, action)
             return [ad.frames] if ad else layers
-        # 组模式：按 layer_rank 排序的 parts 各取 (d,a) 帧，shadow 自动最底
+        # 组模式：按 layer_rank 排序的 parts 各取 (d,a) 帧，shadow 自动最底；
+        # 跳过用户隐藏的部件（右侧 toggle，key 与 show_part_toggles 一致）
         for p in self._group.parts:
+            key = p.part or p.name
+            if key in self._hidden_parts:
+                continue
             ad = p.action_data(direction, action)
             layers.append(ad.frames if ad else [])
         return layers
@@ -475,7 +522,7 @@ class MainWindow(QMainWindow):
                 segs.append("⚠ 缺动作 " + self._missing_actions_text(self._part.missing_actions))
             if self._part.extra_actions:
                 segs.append("⚠ 多余动作 " + self._extra_actions_text(self._part.extra_actions))
-            if self._part.has_warnings:
+            if self._fills_check and self._part.has_warnings:
                 segs.append("🟠 " + self._warnings_text())
         elif self._group is not None:
             if self._group.missing_directions:
@@ -486,7 +533,7 @@ class MainWindow(QMainWindow):
                 segs.append("⚠ 多余动作 " + self._extra_actions_text(self._group.extra_actions))
             if self._group.pairing_issues:
                 segs.append("⚠ 配套: " + "；".join(self._group.pairing_issues[:2]))
-            if self._group.has_warnings:
+            if self._fills_check and self._group.has_warnings:
                 segs.append("🟠 " + self._warnings_text())
         self.statusBar().showMessage("　·　".join(segs))
 

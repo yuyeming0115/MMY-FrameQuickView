@@ -25,14 +25,24 @@ REAL_ROOT = Path(r"E:\XYJProject\美术资源\动画序列帧\角色输出图")
 
 
 def _wait_workers(win) -> None:
-    """等 GridView / AnimView 后台解码线程结束（offscreen 下事件驱动）。"""
-    for _ in range(400):
-        QApplication.processEvents()
+    """等 GridView / AnimView 后台解码线程结束（offscreen 下事件驱动）。
+
+    注意：processEvents 在队列空时立即返回（不消耗墙钟时间），worker 线程
+    得不到运行机会；必须先用阻塞 wait() 给线程真实时间，再 processEvents
+    投递排队信号（frame_ready/finished），否则会读到「解码中」的中间态。
+    """
+    for _ in range(20):
         wg = win.grid_view._worker
         wa = win.anim_view._worker
-        if (wg is None or not wg.isRunning()) and (wa is None or not wa.isRunning()):
+        done = (wg is None or not wg.isRunning()) and (wa is None or not wa.isRunning())
+        if done:
             break
-    QApplication.processEvents()
+        if wg is not None and wg.isRunning():
+            wg.wait(500)
+        if wa is not None and wa.isRunning():
+            wa.wait(500)
+    for _ in range(10):
+        QApplication.processEvents()
 
 
 def main() -> int:
@@ -110,7 +120,7 @@ def main() -> int:
 
             # 模拟用户点击过按钮：焦点落在方向按钮上（offscreen 默认焦点在模板下拉框，
             # 会被输入控件保护逻辑拦截，故显式设焦点）
-            btn = win.matrix.dir_row._buttons.get(d_before)
+            btn = win.matrix.dir_stack._buttons.get(d_before)
             if btn is not None:
                 btn.setFocus()
             assert not isinstance(win.focusWidget(), (QLineEdit, QComboBox)), \
