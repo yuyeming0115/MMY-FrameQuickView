@@ -165,6 +165,8 @@ class PartList(QFrame):
                     header = self._namemap.display(first.name, grp.res_id)
                 if grp.has_issues:
                     header += "  🔴"
+                elif grp.has_warnings:
+                    header += "  🟠"
                 grp_item = QTreeWidgetItem([header])
                 grp_item.setForeground(0, QBrush(SUB))
                 grp_item.setData(0, Qt.UserRole, "GRP:" + grp.res_id)
@@ -178,6 +180,8 @@ class PartList(QFrame):
                         label = f"{label} · {self._namemap.part_cn(pd.part)}"
                     if pd.has_issues:
                         label += "  🔴"
+                    elif pd.has_warnings:
+                        label += "  🟠"
                     child = QTreeWidgetItem([label])
                     child.setData(0, Qt.UserRole, str(pd.folder))
                     child.setFlags(child.flags() & ~Qt.ItemIsEditable)

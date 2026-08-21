@@ -42,9 +42,12 @@ class PartData:
     effective_type: str = ""               # 查漏实际使用的类型（覆盖 wings/mount/npc/空）
     missing_directions: list[str] = field(default_factory=list)
     # 方向存在但「约定动作」缺失: {direction: [action, ...]}（按角色类型+方向基准）
-    missing_actions: dict[str, list[str]] = field(default_factory=dict)
+    missing_actions: dict[str, list[str]] = field(default_factory=list)
     # 模板外多余动作: {direction: [action, ...]}（如旧工程的 catch/sprint）
     extra_actions: dict[str, list[str]] = field(default_factory=dict)
+    # 警告级缺漏（如 fills 缺失）：不进红色 missing，只在左栏/状态栏橙色提示
+    warning_directions: list[str] = field(default_factory=list)
+    warning_actions: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def name(self) -> str:
@@ -55,6 +58,10 @@ class PartData:
         if self.missing_directions or self.missing_actions or self.extra_actions:
             return True
         return any(not ad.continuous for d in self.matrix.values() for ad in d.values())
+
+    @property
+    def has_warnings(self) -> bool:
+        return bool(self.warning_directions or self.warning_actions)
 
     def action_data(self, direction: str, action: str) -> ActionData | None:
         return self.matrix.get(direction, {}).get(action)
@@ -80,12 +87,23 @@ class IdGroup:
     missing_actions: dict[str, list[str]] = field(default_factory=dict)
     # 模板外多余动作（组内并集）: {direction: [action, ...]}
     extra_actions: dict[str, list[str]] = field(default_factory=dict)
+    # 警告级缺漏（如 fills 缺失）：组内非 fills 部件存在、但整组没有 fills
+    missing_fills: list[str] = field(default_factory=list)   # 缺的方向
+    # 组内 fills 部件的警告级缺漏
+    fills_warning_directions: list[str] = field(default_factory=list)
+    fills_warning_actions: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def has_issues(self) -> bool:
         if self.pairing_issues or self.missing_directions or self.missing_actions or self.extra_actions:
             return True
         return any(p.has_issues for p in self.parts)
+
+    @property
+    def has_warnings(self) -> bool:
+        if self.missing_fills or self.fills_warning_directions or self.fills_warning_actions:
+            return True
+        return any(p.has_warnings for p in self.parts)
 
 
 @dataclass
@@ -130,6 +148,22 @@ def _looks_like_part_folder(folder: Path, tpl: Template) -> bool:
     known = set(tpl.directions) | set(tpl.actions)
     hits = sum(1 for name in children if name in known)
     return hits >= 2
+
+
+def _is_leaf_part_folder(folder: Path, tpl: Template) -> bool:
+    """判定 folder 是否为「叶子部件文件夹」：直接子目录含 ≥1 个 direction。
+
+    用于区分真部件文件夹（内层直接是 E/N/NW/S/SE 方向）与「ID 壳 / 分类文件夹」：
+    如 怪物/503006/503006_body，503006 名字是纯 ID 但内层是 503006_body 等部件壳，
+    不是部件文件夹，需继续下钻。而 503026_神龙（整体资源）内层直接是 direction，
+    是叶子部件文件夹。名字解析交给 scan_part 内的 _parse_folder_or_struct。
+    """
+    try:
+        children = [c.name for c in folder.iterdir() if c.is_dir()]
+    except OSError:
+        return False
+    dirs = set(tpl.directions)
+    return any(name in dirs for name in children)
 
 
 def _parse_folder_or_struct(folder: Path, tpl: Template) -> tuple[str, str | None] | None:
@@ -214,11 +248,13 @@ def scan_part(folder: Path, tpl: Template, char_type_of=None) -> PartData | None
 
     missing_directions = [d for d in tpl.directions if d not in matrix]
     missing_actions: dict[str, list[str]] = {}
-    # shadow/fills 是配套部件（影子/补丁），动作跟随主体，不单独查漏。
+    # shadow 是配套部件（影子），动作跟随主体，不单独查漏。
+    # fills 参与查漏，但作为「警告级」：缺失写入 warning_* 字段（左栏橙点/状态栏橙字），
+    # 不进红色 missing（不打红按钮矩阵）。其漏检基准 = 本角色类型×方向约定动作。
     # 翅膀部件用 wings 规则；坐骑部件用 mount 规则；其他按角色类型。
     # NPC 兜底：匹配表未标类型（default non_protagonist）且实际无任何
     # attack/skill/hurt/block/dead/ride_* 动作 → 按 npc 规则（5方向仅 idle/run）。
-    if part in ("shadow", "fills"):
+    if part == "shadow":
         part_type = ""  # 空 → expected_actions 返回 [] → 不查漏
     elif part == "wings":
         part_type = "wings"
@@ -236,11 +272,28 @@ def scan_part(folder: Path, tpl: Template, char_type_of=None) -> PartData | None
             # 无战斗动作也无坐骑动作 → NPC（只有 idle/run）
             if not (owned_actions & combat) and not (owned_actions & ride):
                 part_type = "npc"
-    for d in matrix:
+    # fills 的查漏基准：与主体一致（按角色类型），但结果记入警告级
+    missing_directions_ = missing_directions
+    missing_actions_ = missing_actions
+    for d in (matrix if part != "fills" else set(tpl.directions)):
+        if part == "fills" and d not in matrix:
+            missing_actions_.setdefault(d, list(tpl.expected_actions(part_type, d)))
+            continue
         expected = tpl.expected_actions(part_type, d)
         miss = [a for a in expected if a not in matrix[d]]
         if miss:
-            missing_actions[d] = miss
+            missing_actions_[d] = miss
+
+    if part == "fills":
+        warning_directions = [d for d in tpl.directions if d not in matrix]
+        warning_actions = {d: a for d, a in missing_actions_.items() if a}
+        return PartData(
+            folder=folder, res_id=res_id, part=part, matrix=matrix,
+            character_type=char_type, effective_type=part_type,
+            missing_directions=[], missing_actions={},
+            extra_actions=extra_actions,
+            warning_directions=warning_directions, warning_actions=warning_actions,
+        )
 
     return PartData(
         folder=folder, res_id=res_id, part=part, matrix=matrix,
@@ -292,10 +345,12 @@ def scan_root(root: Path, tpl: Template, char_type_of=None, max_depth: int = 4) 
 
 
 def _find_part_folders(root: Path, tpl: Template, max_depth: int) -> list[Path]:
-    """BFS 收集 root 下所有「部件文件夹」（parse_folder_name 命中且本身是目录）。
+    """BFS 收集 root 下所有「叶子部件文件夹」（内层直接是 direction）。
 
-    - 命中部件文件夹：收集，且**不再下钻**（其下是 方向/动作，不是部件）。
-    - 非部件目录（角色名/分类文件夹）：继续向下递归，直到 max_depth。
+    - 叶子部件文件夹：收集，且**不再下钻**（其下是 方向/动作，不是部件）。
+    - 非叶子目录（角色名/分类文件夹/ID壳）：子目录是部件文件夹而非 direction，
+      继续向下递归，直到 max_depth。名字是否命中不作为叶子判据——如 怪物/503006/
+      名字是纯ID但内层是 503006_body 壳，不是部件文件夹，必须继续下钻。
     - 用真实完整路径返回，调用方直接 scan_part(该路径) 即得正确帧路径。
     """
     found: list[Path] = []
@@ -311,10 +366,10 @@ def _find_part_folders(root: Path, tpl: Template, max_depth: int) -> list[Path]:
         for c in children:
             if not c.is_dir():
                 continue
-            if _parse_folder_or_struct(c, tpl) is not None:
-                found.append(c)                 # 部件文件夹：收集，不继续下钻
+            if _is_leaf_part_folder(c, tpl):
+                found.append(c)                 # 叶子部件文件夹：收集，不继续下钻
             else:
-                stack.append((c, depth + 1))    # 角色/分类文件夹：继续递归
+                stack.append((c, depth + 1))    # 角色/分类/ID壳文件夹：继续递归
     return found
 
 
@@ -374,6 +429,21 @@ def _group_parts(parts: list[PartData], tpl: Template, char_type_of=None) -> lis
                 extra_per_dir.setdefault(d, set()).update(acts)
         for d, acts in extra_per_dir.items():
             grp.extra_actions[d] = sorted(acts)
+        # 组级 fills 警告：组内存在主体部件，但整组无 fills → 缺 fills（警告级）
+        non_fill_parts = [p for p in members if p.part != "fills"]
+        fills_parts = [p for p in members if p.part == "fills"]
+        if non_fill_parts and not fills_parts:
+            nf_dirs: set[str] = set()
+            for p in non_fill_parts:
+                nf_dirs |= set(p.available_directions())
+            grp.missing_fills = sorted(nf_dirs)
+        # 有 fills 部件时，合并其自身警告级缺失到组级
+        for p in fills_parts:
+            grp.fills_warning_directions = sorted(set(grp.fills_warning_directions) | set(p.warning_directions))
+            for d, acts in p.warning_actions.items():
+                cur = set(grp.fills_warning_actions.get(d, []))
+                cur.update(acts)
+                grp.fills_warning_actions[d] = sorted(cur)
         if len(members) > 1:
             grp.pairing_issues = _check_pairing(members)
         groups.append(grp)

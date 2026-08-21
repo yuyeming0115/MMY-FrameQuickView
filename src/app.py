@@ -475,6 +475,8 @@ class MainWindow(QMainWindow):
                 segs.append("⚠ 缺动作 " + self._missing_actions_text(self._part.missing_actions))
             if self._part.extra_actions:
                 segs.append("⚠ 多余动作 " + self._extra_actions_text(self._part.extra_actions))
+            if self._part.has_warnings:
+                segs.append("🟠 " + self._warnings_text())
         elif self._group is not None:
             if self._group.missing_directions:
                 segs.append("⚠ 缺方向: " + ", ".join(self._group.missing_directions))
@@ -484,7 +486,36 @@ class MainWindow(QMainWindow):
                 segs.append("⚠ 多余动作 " + self._extra_actions_text(self._group.extra_actions))
             if self._group.pairing_issues:
                 segs.append("⚠ 配套: " + "；".join(self._group.pairing_issues[:2]))
+            if self._group.has_warnings:
+                segs.append("🟠 " + self._warnings_text())
         self.statusBar().showMessage("　·　".join(segs))
+
+    def _warnings_text(self) -> str:
+        """组级/部件级警示摘要（橙色，目前为 fills 缺失）。"""
+        grp, part = self._group, self._part
+        bits: list[str] = []
+        if grp is not None:
+            if grp.missing_fills:
+                bits.append(f"缺 fills 部件（{', '.join(grp.missing_fills)}）")
+            if grp.fills_warning_directions:
+                bits.append("fills 缺方向: " + ", ".join(grp.fills_warning_directions))
+            if grp.fills_warning_actions:
+                bits.append("fills 缺动作 " + self._missing_actions_text(grp.fills_warning_actions))
+            filled_parts = [p for p in grp.parts if p.has_warnings]
+            for p in filled_parts:
+                details = []
+                if p.warning_directions:
+                    details.append("方向 " + ", ".join(p.warning_directions))
+                if p.warning_actions:
+                    details.append("动作 " + self._missing_actions_text(p.warning_actions))
+                if details:
+                    bits.append("fills 缺 " + " / ".join(details))
+        elif part is not None:
+            if part.warning_directions:
+                bits.append(f"fills 缺方向: {', '.join(part.warning_directions)}")
+            if part.warning_actions:
+                bits.append("fills 缺动作 " + self._missing_actions_text(part.warning_actions))
+        return "；".join(bits)
 
     def _missing_actions_text(self, missing: dict[str, list[str]]) -> str:
         """按方向顺序拼接 `方向: 缺动作…`；方向顺序优先取模板 directions。"""
