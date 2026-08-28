@@ -1,6 +1,8 @@
-"""左栏部件列表：按 ID 分组 + 中文名 + 可搜索 + 缺漏红点 + 内联改名。
+"""左栏部件列表：按 ID 分组 + 中文名 + 可搜索 + 分类 chips 过滤 + 缺漏红点 + 内联改名。
 
 - 组头显示 `502019 · 杜如晦`（来自 NameMap，无映射则只显示 ID）
+- 过滤框下方一行分类 chips（主角/伙伴/怪物/BOSS/NPC/坐骑/翅膀/特效，来自模板
+  categories 规则），单击过滤、再点取消，与搜索框叠加（AND）
 - 组头 F2/双击可改中文名，回车写回匹配表 txt
 - ↑↓ 键移动、回车打开（QTreeWidget 原生支持）
 """
@@ -10,17 +12,27 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QBrush, QGuiApplication
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLineEdit, QLabel, QMenu, QPushButton, QTreeWidget,
-    QTreeWidgetItem, QVBoxLayout, QAbstractItemView, QHeaderView,
+    QTreeWidgetItem, QVBoxLayout, QAbstractItemView, QHeaderView, QWidget,
 )
 
 from .hover_scroll import enable_hover_scroll
+from .flow_layout import FlowLayout
 
 from ..core.namemap import NameMap
 from ..core.scanner import PartData, ScanResult
+from ..core.template import Template
 
 GOLD = QColor("#D4AF37")
 SUB = QColor("#96A1AD")
 TEXT = QColor("#E8E4D9")
+
+CHIP_STYLE = (
+    "QPushButton { background: #2A2E33; border: 1px solid #3A3F46; border-radius: 4px;"
+    " color: #96A1AD; padding: 2px 10px; font-size: 13px; }"
+    "QPushButton:checked { color: #D4AF37; border-color: #D4AF37;"
+    " background: rgba(212,175,55,0.12); }"
+    "QPushButton:hover { border-color: #D4AF37; color: #D4AF37; }"
+)
 
 # 列宽不再硬编码：树第 0 列在 resizeEvent 里跟随容器宽度（容器宽 - 折叠按钮 28 - padding 12 ≈ - 40）。
 # 容器允许拖动范围 220~480，列宽自然跟动。
@@ -79,6 +91,16 @@ class PartList(QFrame):
         filter_row.addWidget(self.map_btn)
         layout.addLayout(filter_row)
 
+        # 分类 chips 行（M21）：过滤框正下方，流式换行；只显示当前结果存在的分类
+        self._category_order: list[str] = []        # 模板 categories 顺序
+        self._active_category: str = ""             # "" = 全部
+        self._chips: dict[str, QPushButton] = {}    # category(""=全部) -> chip
+        self._chips_host = QWidget()
+        self._chips_host.setStyleSheet("background: transparent;")
+        self._chips_layout = FlowLayout(self._chips_host, margin=0, spacing=4)
+        self._chips_host.hide()
+        layout.addWidget(self._chips_host)
+
         self._all_expanded = False  # 默认折叠（▶ 状态）；rebuild 后所有 ID 组收起
 
         self.tree = QTreeWidget()
@@ -129,6 +151,10 @@ class PartList(QFrame):
     # ---------------- 数据 ----------------
     def set_namemap(self, namemap: NameMap) -> None:
         self._namemap = namemap
+
+    def set_template(self, tpl: Template | None) -> None:
+        """模板分类顺序（chips 顺序与模板 categories 配置一致）。"""
+        self._category_order = tpl.category_names() if tpl else []
 
     def set_fills_check(self, enabled: bool) -> None:
         """fills 警告检测开关：关闭后左栏不再显示 🟠 橙点（🔴 红点缺漏不受影响）。
@@ -217,6 +243,7 @@ class PartList(QFrame):
                 grp_item = QTreeWidgetItem([header])
                 grp_item.setForeground(0, QBrush(SUB))
                 grp_item.setData(0, Qt.UserRole, "GRP:" + grp.res_id)
+                grp_item.setData(0, Qt.UserRole + 1, grp.category)
                 # 组头可选中（叠层显示）且可编辑（改名）
                 grp_item.setFlags(grp_item.flags() | Qt.ItemIsEditable | Qt.ItemIsSelectable)
                 self.tree.addTopLevelItem(grp_item)
@@ -237,14 +264,68 @@ class PartList(QFrame):
                     self._parts[str(pd.folder)] = pd
                 grp_item.setExpanded(False)   # 默认折叠：只显示 ID/角色 组头，点击 ▼ 展开
 
-            n_issue = sum(1 for p in self._result.parts if p.has_issues)
-            self.count_label.setText(
-                f"共 {len(self._result.parts)} 项 · 按 ID 分组 · {n_issue} 项缺漏"
-                + (f" · 忽略 {len(self._result.ignored)}" if self._result.ignored else "")
-            )
+            self._rebuild_chips()
             self._apply_filter(self.filter_edit.text())
         finally:
             self._loading = False
+
+    # ---------------- 分类 chips ----------------
+    def _rebuild_chips(self) -> None:
+        """按当前扫描结果重建分类 chips：只列出实际存在的分类（模板顺序）。"""
+        for btn in self._chips.values():
+            btn.hide()
+            btn.deleteLater()
+        self._chips.clear()
+        self._active_category = ""
+        if self._result is None:
+            self._chips_host.hide()
+            return
+        present = {g.category for g in self._result.groups if g.category}
+        names = [c for c in self._category_order if c in present]
+        if len(names) < 2:      # 分类不足 2 个时隐藏整行，不占左栏空间
+            self._chips_host.hide()
+            return
+        self._make_chip("全部", "")
+        for name in names:
+            self._make_chip(name, name)
+        self._chips_host.show()
+        self._sync_chips()
+
+    def _make_chip(self, text: str, category: str) -> QPushButton:
+        btn = QPushButton(text)
+        btn.setCheckable(True)
+        btn.setFixedHeight(24)
+        btn.setStyleSheet(CHIP_STYLE)
+        btn.setToolTip(f"只看「{text}」类资源（再点一次取消）")
+        btn.clicked.connect(lambda _=False, c=category: self._on_chip_clicked(c))
+        self._chips_layout.addWidget(btn)
+        self._chips[category] = btn
+        return btn
+
+    def _on_chip_clicked(self, category: str) -> None:
+        if not category or self._active_category == category:
+            self._active_category = ""    # 点「全部」或再点当前 chip → 取消过滤
+        else:
+            self._active_category = category
+        self._sync_chips()
+        self._apply_filter(self.filter_edit.text())
+
+    def _sync_chips(self) -> None:
+        for cat, btn in self._chips.items():
+            btn.setChecked(cat == self._active_category)
+
+    def _refresh_count(self) -> None:
+        if self._result is None:
+            return
+        n_issue = sum(1 for p in self._result.parts if p.has_issues)
+        text = (f"共 {len(self._result.parts)} 项 · 按 ID 分组 · {n_issue} 项缺漏"
+                + (f" · 忽略 {len(self._result.ignored)}" if self._result.ignored else ""))
+        if self._active_category:
+            total = self.tree.topLevelItemCount()
+            visible = sum(1 for i in range(total)
+                          if not self.tree.topLevelItem(i).isHidden())
+            text = f"{self._active_category} · {visible}/{total} 组 · " + text
+        self.count_label.setText(text)
 
     def _select_by_key(self, key: str) -> None:
         for i in range(self.tree.topLevelItemCount()):
@@ -268,17 +349,24 @@ class PartList(QFrame):
         return items[0].data(0, Qt.UserRole)
 
     def _apply_filter(self, text: str) -> None:
+        """分类 chips + 搜索文字叠加过滤（AND）。"""
         text = text.strip().lower()
+        cat = self._active_category
         for i in range(self.tree.topLevelItemCount()):
             grp_item = self.tree.topLevelItem(i)
+            cat_ok = (not cat) or (grp_item.data(0, Qt.UserRole + 1) or "") == cat
             grp_hit = text in grp_item.text(0).lower()
             visible_children = 0
             for j in range(grp_item.childCount()):
                 child = grp_item.child(j)
-                hit = (not text) or grp_hit or text in child.text(0).lower()
+                hit = cat_ok and ((not text) or grp_hit or text in child.text(0).lower())
                 child.setHidden(not hit)
                 visible_children += int(hit)
-            grp_item.setHidden(bool(text) and not grp_hit and visible_children == 0)
+            grp_item.setHidden(
+                (not cat_ok)
+                or (bool(text) and not grp_hit and visible_children == 0)
+            )
+        self._refresh_count()
 
     def _toggle_collapse(self) -> None:
         """一键折叠 / 展开所有 ID 组。"""
