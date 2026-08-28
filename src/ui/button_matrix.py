@@ -156,6 +156,18 @@ class ButtonMatrix(QFrame):
         tpl = self._tpl
         if tpl is None:
             return
+        if part.is_flat:
+            # 扁平资源（特效类）：方向/动作来自实际数据（虚拟方向 + 序列前缀），
+            # 不对照模板列表，也不做缺失标记
+            avail = part.available_directions()
+            if direction not in avail:
+                direction = avail[0] if avail else None
+            self.dir_stack.rebuild(avail, set(), direction)
+            acts = part.available_actions(direction) if direction else []
+            if action not in acts:
+                action = acts[0] if acts else None
+            self.act_stack.rebuild(acts, set(), action)
+            return
         miss_dirs = set(part.missing_directions)
         if direction is None:
             # 首次进入：优先默认方向 SE（若部件拥有），否则取第一个可用方向
@@ -190,6 +202,22 @@ class ButtonMatrix(QFrame):
         self._part = None
         tpl = self._tpl
         if tpl is None:
+            return
+        if group.is_flat:
+            # 扁平资源组（特效类）：按钮来自组内并集（虚拟方向 + 序列前缀），无缺失标记
+            avail_d: set[str] = set()
+            acts_by_dir: dict[str, set[str]] = {}
+            for p in group.parts:
+                for d in p.available_directions():
+                    avail_d.add(d)
+                    acts_by_dir.setdefault(d, set()).update(p.available_actions(d))
+            if direction not in avail_d:
+                direction = sorted(avail_d)[0] if avail_d else None
+            self.dir_stack.rebuild(sorted(avail_d), set(), direction)
+            acts = sorted(acts_by_dir.get(direction, set())) if direction else []
+            if action not in acts:
+                action = acts[0] if acts else None
+            self.act_stack.rebuild(acts, set(), action)
             return
         avail_d: set[str] = set()
         owned_a: set[str] = set()

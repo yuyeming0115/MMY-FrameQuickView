@@ -26,6 +26,10 @@ class Template:
     action_rules: dict[str, dict[str, list[str]]] = field(default_factory=dict)
     # 匹配表中未标注类型时的默认角色类型。
     default_character_type: str = "non_protagonist"
+    # 分类规则（有序匹配，先具体后宽泛）：左栏分类 chips 过滤 + 特效扁平结构识别。
+    # 每条：{"name": 分类名, "part_any": [部件名...], "id_prefix": [ID前缀...],
+    #        "flat": bool, "frame_pattern": stem正则, "virtual_direction": 虚拟方向名}
+    categories: list[dict] = field(default_factory=list)
 
     # 角色类型归一化：匹配表第3列 → action_rules 的 key。
     # 主角类 → protagonist；伙伴/怪物/boss → non_protagonist；
@@ -56,6 +60,36 @@ class Template:
     def expected_actions(self, char_type: str, direction: str) -> list[str]:
         """某角色类型在某方向「应当存在」的动作；方向/类型不在规则内返回空（不查漏）。"""
         return list(self.action_rules.get(char_type, {}).get(direction, []))
+
+    # ---------- 分类 ----------
+    def classify(self, res_id: str, parts: list[str | None]) -> str:
+        """按 categories 有序匹配（部件特征优先于 ID 前缀）返回分类名；未命中返回空串。
+
+        - part_any：组内任一部件名命中（如 ride_* → 坐骑、wings → 翅膀）
+        - id_prefix：资源 ID 前缀命中（如 50105 → 特效、502 → 伙伴）
+        顺序即优先级：坐骑/翅膀/特效等具体规则须排在 主角(501)/怪物(503) 等宽泛前缀之前。
+        """
+        for cat in self.categories:
+            part_any = cat.get("part_any") or []
+            if part_any and any(p in part_any for p in parts):
+                return cat.get("name", "")
+            prefixes = cat.get("id_prefix") or []
+            if prefixes and any(res_id.startswith(pf) for pf in prefixes):
+                return cat.get("name", "")
+        return ""
+
+    def flat_rule(self, res_id: str) -> dict | None:
+        """资源 ID 命中的扁平结构（特效类）规则；未命中返回 None。"""
+        for cat in self.categories:
+            if not cat.get("flat"):
+                continue
+            prefixes = cat.get("id_prefix") or []
+            if any(res_id.startswith(pf) for pf in prefixes):
+                return cat
+        return None
+
+    def category_names(self) -> list[str]:
+        return [c.get("name", "") for c in self.categories if c.get("name")]
 
     # ---------- 解析辅助 ----------
     def frame_regex(self) -> re.Pattern:
@@ -105,6 +139,7 @@ class Template:
             "extensions": self.extensions,
             "action_rules": self.action_rules,
             "default_character_type": self.default_character_type,
+            "categories": self.categories,
         }
 
     @classmethod
@@ -121,6 +156,7 @@ class Template:
             extensions=list(data.get("extensions", [".png"])),
             action_rules=dict(data.get("action_rules", {})),
             default_character_type=data.get("default_character_type", "non_protagonist"),
+            categories=list(data.get("categories", [])),
         )
 
 

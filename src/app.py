@@ -85,6 +85,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self.part_list.set_fills_check(self._fills_check)   # 启动时同步左栏橙点开关
+        self.part_list.set_template(self._tpl)              # 分类 chips 顺序来源
         if self._tpl:
             self.matrix.set_template(self._tpl)
             self.anim_view.set_available_dirs(set(self._tpl.directions))
@@ -510,7 +511,12 @@ class MainWindow(QMainWindow):
             segs.append(f"部件 {self._part.name}")
         ad = self._current_ad(direction, action)
         if ad and ad.count:
-            rng = f"{ad.numbers[0]:04d}–{ad.numbers[-1]:04d}"
+            is_flat = (self._part is not None and self._part.is_flat) or \
+                      (self._group is not None and self._group.is_flat)
+            if is_flat:
+                rng = f"{ad.numbers[0]}–{ad.numbers[-1]}"       # 特效帧号不补零
+            else:
+                rng = f"{ad.numbers[0]:04d}–{ad.numbers[-1]:04d}"
             segs.append(f"{ad.count} 帧（{rng}）")
             segs.append("✅ 区间内帧号连续" if ad.continuous else f"⚠ 缺帧 {ad.gaps[:5]}")
         elif direction and action:
@@ -580,6 +586,7 @@ class MainWindow(QMainWindow):
         if 0 <= index < len(self._templates):
             self._tpl = self._templates[index]
             self.matrix.set_template(self._tpl)
+            self.part_list.set_template(self._tpl)
             self.anim_view.set_available_dirs(set(self._tpl.directions))
             if self._result and self._result.root:
                 self._on_folder_dropped(self._result.root)
@@ -611,6 +618,7 @@ class MainWindow(QMainWindow):
         self._tpl = self._templates[self.tpl_combo.currentIndex()] if self._templates else None
         if self._tpl:
             self.matrix.set_template(self._tpl)
+            self.part_list.set_template(self._tpl)
         if self._result and self._result.root and self._tpl:
             self._on_folder_dropped(self._result.root)
 

@@ -48,6 +48,8 @@ class PartData:
     # 警告级缺漏（如 fills 缺失）：不进红色 missing，只在左栏/状态栏橙色提示
     warning_directions: list[str] = field(default_factory=list)
     warning_actions: dict[str, list[str]] = field(default_factory=dict)
+    # 扁平结构资源（特效类）：无方向/动作层级，matrix key 为虚拟方向（如「特效」）
+    is_flat: bool = False
 
     @property
     def name(self) -> str:
@@ -92,6 +94,10 @@ class IdGroup:
     # 组内 fills 部件的警告级缺漏
     fills_warning_directions: list[str] = field(default_factory=list)
     fills_warning_actions: dict[str, list[str]] = field(default_factory=dict)
+    # 资源分类（模板 categories 规则匹配：主角/伙伴/怪物/BOSS/NPC/坐骑/翅膀/特效）
+    category: str = ""
+    # 组内全部为扁平结构资源（特效类）→ 跳过方向/动作查漏
+    is_flat: bool = False
 
     @property
     def has_issues(self) -> bool:
@@ -132,6 +138,46 @@ def _scan_action_folder(action_dir: Path, tpl: Template) -> ActionData:
         present = set(numbers)
         gaps = [n for n in range(numbers[0], numbers[-1] + 1) if n not in present]
     return ActionData(frames=[p for _, p in pairs], numbers=numbers, gaps=gaps)
+
+
+def _scan_flat_folder(folder: Path, tpl: Template, rule: dict) -> dict[str, dict[str, ActionData]]:
+    """扁平结构扫描（特效类）：文件直接放在部件根目录，命名 `前缀_序号.ext`。
+
+    按文件名前缀分组为多个帧序列，映射为 {虚拟方向: {前缀: ActionData}}，
+    帧号断档检测与常规序列一致（min→max 区间连续，不要求从 1 开始）。
+    frame_pattern 匹配去扩展名的 stem：group(1)=前缀（动作名），group(2)=帧号。
+    """
+    rx = re.compile(rule.get("frame_pattern", r"^(.+?)_(\d+)$"), re.IGNORECASE)
+    exts = tpl.ext_set()
+    virtual_dir = rule.get("virtual_direction", "特效")
+    seqs: dict[str, list[tuple[int, Path]]] = {}
+    try:
+        entries = list(folder.iterdir())
+    except OSError:
+        return {}
+    for fp in entries:
+        if not fp.is_file() or fp.suffix.lower() not in exts:
+            continue
+        m = rx.match(fp.stem)
+        if m:
+            seqs.setdefault(m.group(1), []).append((int(m.group(2)), fp))
+    matrix: dict[str, dict[str, ActionData]] = {}
+    for prefix, pairs in seqs.items():
+        pairs.sort(key=lambda x: x[0])
+        numbers = [n for n, _ in pairs]
+        gaps = [n for n in range(numbers[0], numbers[-1] + 1)
+                if n not in set(numbers)] if numbers else []
+        matrix.setdefault(virtual_dir, {})[prefix] = ActionData(
+            frames=[p for _, p in pairs], numbers=numbers, gaps=gaps)
+    return matrix
+
+
+def _is_flat_folder(folder: Path, tpl: Template) -> bool:
+    """判定 folder 是否为扁平结构资源：名字解析为纯 ID 且命中模板 flat 规则。"""
+    parsed = tpl.parse_folder_name(folder.name)
+    if parsed is None or parsed[1] is not None:
+        return False
+    return tpl.flat_rule(parsed[0]) is not None
 
 
 def _looks_like_part_folder(folder: Path, tpl: Template) -> bool:
@@ -219,7 +265,21 @@ def scan_part(folder: Path, tpl: Template, char_type_of=None) -> PartData | None
             matrix[first_name] = col
 
     if not matrix:
-        return None
+        # 常规方向/动作结构无有效内容 → 尝试扁平结构（特效类，仅纯 ID 整体资源）。
+        # 带 _part 后缀的文件夹不做扁平兜底，防止把常规部件误判成特效。
+        if part is not None:
+            return None
+        rule = tpl.flat_rule(res_id)
+        if rule is None:
+            return None
+        matrix = _scan_flat_folder(folder, tpl, rule)
+        if not matrix:
+            return None
+        # 扁平资源无方向/动作约定 → 不做查漏，仅帧号断档检测（ActionData.gaps）
+        return PartData(
+            folder=folder, res_id=res_id, part=None, matrix=matrix,
+            character_type=char_type, effective_type="flat", is_flat=True,
+        )
 
     # matrix 的 key 统一为 (direction, action) 语义
     if first != "direction":
@@ -368,6 +428,8 @@ def _find_part_folders(root: Path, tpl: Template, max_depth: int) -> list[Path]:
                 continue
             if _is_leaf_part_folder(c, tpl):
                 found.append(c)                 # 叶子部件文件夹：收集，不继续下钻
+            elif _is_flat_folder(c, tpl):
+                found.append(c)                 # 扁平结构资源（特效类）：文件直接在根目录
             else:
                 stack.append((c, depth + 1))    # 角色/分类/ID壳文件夹：继续递归
     return found
@@ -385,6 +447,14 @@ def _group_parts(parts: list[PartData], tpl: Template, char_type_of=None) -> lis
         members.sort(key=lambda p: tpl.layer_rank(p.part))
         char_type = tpl.resolve_char_type(char_type_of(res_id) if char_type_of else None)
         grp = IdGroup(res_id=res_id, parts=members, character_type=char_type)
+        # 资源分类标注（左栏 chips 过滤用）：部件特征优先于 ID 前缀
+        grp.category = tpl.classify(res_id, [p.part for p in members])
+        # 扁平资源组（特效类）：无方向/动作约定，跳过全部查漏，仅保留帧号断档检测
+        grp.is_flat = bool(members) and all(p.is_flat for p in members)
+        if grp.is_flat:
+            grp.effective_type = "flat"
+            groups.append(grp)
+            continue
         # 组级方向/动作缺漏：以「组内所有部件并集拥有」为参照，对照类型×方向基准
         # 部位类型覆盖：组内所有部件都是 wings → wings 规则；都是 ride_* → mount 规则
         owned_dirs: set[str] = set()

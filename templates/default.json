@@ -8,6 +8,17 @@
   "layer_order": ["shadow", "ride_back", "body", "hair", "weapon", "wings", "ride_front", "fills"],
   "frame_pattern": "^(\\d{4})\\.png$",
   "extensions": [".png", ".webp"],
+  "categories": [
+    {"name": "坐骑", "part_any": ["ride_front", "ride_back"]},
+    {"name": "翅膀", "part_any": ["wings"]},
+    {"name": "特效", "id_prefix": ["50105"], "flat": true,
+     "frame_pattern": "^(.+?)_(\\d+)$", "virtual_direction": "特效"},
+    {"name": "主角", "id_prefix": ["501"]},
+    {"name": "伙伴", "id_prefix": ["502"]},
+    {"name": "怪物", "id_prefix": ["503"]},
+    {"name": "BOSS", "id_prefix": ["504"]},
+    {"name": "NPC", "id_prefix": ["505"]}
+  ],
   "default_character_type": "non_protagonist",
   "action_rules": {
     "protagonist": {
