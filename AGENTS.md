@@ -63,6 +63,11 @@ E:\Temp\天命装\50152101_body
 ...
 ```
 
+> ⚠️ 特效扁平结构（M21，模板 categories 规则识别，默认 50105 前缀）：
+> 无方向/动作层级，图片直接在根目录，命名 `前缀_序号.png`（非四位补零）。
+> 例：`50105101/changrao_1.png ~ changrao_20.png` → 虚拟方向「特效」+ 动作 changrao。
+> 只做帧号断档检测，不做方向/动作查漏。
+
 ### 默认模板（templates/default.json）
 
 | 类别 | 名称 |
@@ -114,8 +119,9 @@ MMY-FrameQuickView/
 │   │   └── imageops.py        # 包围盒裁剪（并集bbox）、帧加载
 │   └── ui/
 │       ├── drop_zone.py       # 拖拽区
-│       ├── part_list.py       # 左栏部件列表（可搜索、缺漏红点）
-│       ├── button_matrix.py   # 方向/动作按钮组（含缺失状态标记）
+│       ├── part_list.py       # 左栏部件列表（可搜索、分类chips过滤、缺漏红点）
+│       ├── button_matrix.py   # 方向/动作按钮组（含缺失状态标记、扁平特效虚拟方向）
+│       ├── flow_layout.py     # 流式换行布局（分类 chips 行）
 │       ├── grid_view.py       # 序列帧网格显示区（A区）
 │       └── anim_view.py       # GIF动画播放区（B区）
 ├── templates/
