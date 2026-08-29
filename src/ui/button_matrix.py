@@ -17,6 +17,24 @@ from ..core.template import Template
 # 否则回退到「第一个可用方向」，避免强制选中缺失方向。
 DEFAULT_DIRECTION = "SE"
 
+# 默认动作：首次进入（或当前动作已缺失）时高亮的动作。
+# 用户 2026-08-29 要求「打开先看待机」：常规类型（主角/伙伴/怪物/BOSS/NPC/翅膀）
+# 优先 idle，坐骑类（mount）优先 ride_idle；都没有则回退字母序第一个。
+#
+# ⚠ 不能直接取 sorted(可用动作)[0]：主角 E 方向约定动作是
+# [idle, attack, run, ride_idle, ride_run]，字母序第一个是 attack，
+# 打开就播攻击动画，不符合直觉。
+DEFAULT_ACTION = "idle"
+DEFAULT_ACTION_BY_TYPE = {"mount": "ride_idle"}
+
+
+def pick_default_action(eff_type: str | None, avail: list[str]) -> str | None:
+    """从可用动作里挑默认动作：按类型优先，该动作缺失则回退字母序第一个。"""
+    if not avail:
+        return None
+    preferred = DEFAULT_ACTION_BY_TYPE.get(eff_type or "", DEFAULT_ACTION)
+    return preferred if preferred in avail else avail[0]
+
 BTN_STYLE = """
 QPushButton {
     background: #2A2E33; border: 1px solid #3A3F46; color: #E8E4D9;
@@ -188,8 +206,7 @@ class ButtonMatrix(QFrame):
             miss_acts = expected - present          # 约定要有却没有 → 红
             unexpected = set(tpl.actions) - expected  # 本类型不需要 → 灰
             if action is None or action in miss_acts:
-                avail = sorted(expected & present)
-                action = avail[0] if avail else None
+                action = pick_default_action(eff_type, sorted(expected & present))
         else:
             unexpected = set(tpl.actions)
         self.act_stack.rebuild(tpl.actions, miss_acts, action, unexpected)
@@ -244,8 +261,7 @@ class ButtonMatrix(QFrame):
             miss_acts = set(group.missing_actions.get(direction, [])) or (expected - owned_a_dir)
             unexpected = set(tpl.actions) - expected
             if action is None or action in miss_acts:
-                avail = sorted(expected & owned_a_dir)
-                action = avail[0] if avail else None
+                action = pick_default_action(eff_type, sorted(expected & owned_a_dir))
             self.act_stack.rebuild(tpl.actions, miss_acts, action, unexpected)
         else:
             self.act_stack.rebuild(tpl.actions, set(), None, set(tpl.actions))
