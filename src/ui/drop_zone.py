@@ -12,6 +12,7 @@ class DropZone(QFrame):
     folder_dropped = Signal(Path)
     reload_namemap_requested = Signal()   # 重新加载匹配表
     pick_namemap_requested = Signal()     # 选择匹配表文件…
+    auto_refresh_toggled = Signal(bool)   # 自动刷新（外部变更）开关
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -44,6 +45,14 @@ class DropZone(QFrame):
         act_reload.triggered.connect(self.reload_namemap_requested.emit)
         act_pick = menu.addAction("📁 选择匹配表文件…")
         act_pick.triggered.connect(self.pick_namemap_requested.emit)
+        menu.addSeparator()
+        self.auto_refresh_act = menu.addAction("📡 自动刷新（检测外部文件变更）")
+        self.auto_refresh_act.setCheckable(True)
+        self.auto_refresh_act.setChecked(True)
+        self.auto_refresh_act.setToolTip(
+            "开启后，外部新增/删除文件约 1 秒后自动重扫并保持当前选择与播放状态"
+        )
+        self.auto_refresh_act.toggled.connect(self.auto_refresh_toggled.emit)
         self._menu_btn.setMenu(menu)
         layout.addWidget(self._menu_btn)
 

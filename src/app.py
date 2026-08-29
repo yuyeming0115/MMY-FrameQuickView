@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QFileSystemWatcher, QSettings, Qt
+from PySide6.QtCore import QEvent, QFileSystemWatcher, QSettings, Qt, QTimer
 from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
     QMessageBox, QPushButton, QSplitter, QVBoxLayout, QWidget,
@@ -68,7 +68,14 @@ class MainWindow(QMainWindow):
         self._namemap = NameMap()
         self._watcher = QFileSystemWatcher(self)
         self._watcher.fileChanged.connect(self._on_namemap_changed)
+        # M24：资源文件夹变更监听（外部增删文件 → 防抖后自动重扫）
+        self._dir_watcher = QFileSystemWatcher(self)
+        self._dir_watcher.directoryChanged.connect(self._on_tree_changed)
+        self._rescan_timer = QTimer(self)               # 防抖：静默 1s 后重扫一次
+        self._rescan_timer.setSingleShot(True)
+        self._rescan_timer.timeout.connect(self._auto_rescan)
         self._settings = QSettings("MMY", "FrameQuickView")
+        self._auto_refresh = bool(self._settings.value("checks/auto_refresh", True, type=bool))
         self._last_folder: Path | None = None      # 最近一次拖入的目录
         self._last_map_file: Path | None = None    # 最近一次成功加载的匹配表
         # 组视图右侧 toggle 中用户隐藏的部件层（QSettings 记忆）
@@ -111,6 +118,8 @@ class MainWindow(QMainWindow):
         self.drop.folder_dropped.connect(self._on_folder_dropped)
         self.drop.reload_namemap_requested.connect(self._reload_namemap)
         self.drop.pick_namemap_requested.connect(self._pick_map_file)
+        self.drop.auto_refresh_act.setChecked(self._auto_refresh)
+        self.drop.auto_refresh_toggled.connect(self._on_auto_refresh_toggled)
         top.addWidget(self.drop, 1)  # 占满左侧
         top.addSpacing(8)
         top.addWidget(QLabel("模板"))
@@ -217,6 +226,89 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(
                 f"ℹ 未识别到符合模板的部件文件夹（忽略 {len(self._result.ignored)} 项）"
             )
+        self._setup_dir_watcher(folder)
+
+    # ---------------- M24：文件夹变更自动刷新 ----------------
+    # watch 上限：超过则降级为「root + 套装父目录 + 部件目录」级监听
+    #（部件增删可感知，帧级变更不感知），避免大库（万级目录）耗尽句柄。
+    WATCH_LIMIT = 2000
+
+    def _collect_watch_dirs(self, root: Path) -> list[Path]:
+        """递归收集 root 下全部子目录（含 root）；超上限降级为部件级。"""
+        all_dirs: list[Path] = [root]
+        stack = [root]
+        while stack:
+            d = stack.pop()
+            try:
+                for c in d.iterdir():
+                    if c.is_dir():
+                        all_dirs.append(c)
+                        stack.append(c)
+            except (PermissionError, OSError):
+                continue
+            if len(all_dirs) > self.WATCH_LIMIT:
+                break
+        if len(all_dirs) <= self.WATCH_LIMIT:
+            return all_dirs
+        # 降级：root + 已识别部件所在目录链（父目录变化能感知部件增删）
+        keep = {root}
+        if self._result is not None:
+            for p in self._result.parts:
+                keep.add(p.folder)
+                keep.add(p.folder.parent)
+        return sorted(keep)
+
+    def _setup_dir_watcher(self, folder: Path) -> None:
+        """扫描后（重）建目录监听：新增的目录也要纳入（如新导出的方向/动作）。"""
+        if not self._auto_refresh or not folder.is_dir():
+            return
+        old = self._dir_watcher.directories()
+        if old:
+            self._dir_watcher.removePaths(old)
+        dirs = [str(d) for d in self._collect_watch_dirs(folder)]
+        failed = self._dir_watcher.addPaths(dirs)
+        if failed:                                   # 竞态中已删除的目录：清掉避免警告
+            self._dir_watcher.removePaths(failed)
+
+    def _on_tree_changed(self, _path: str) -> None:
+        if not self._auto_refresh or self._result is None:
+            return
+        if not self._result.root.is_dir():
+            return                                  # 拖入目录整体被删：等用户重新拖入
+        self._rescan_timer.start()                  # 防抖：静默 1s 后重扫
+
+    def _auto_rescan(self) -> None:
+        """自动重扫：保持选中项 / 方向 / 动作 / B 区播放状态。"""
+        if self._result is None or not self._result.root.is_dir():
+            return
+        key = self.part_list.current_key()
+        direction, action = self.matrix.current()
+        paused = not self.anim_view._play_btn.isChecked()
+        idx = self.anim_view._index
+        root = self._result.root
+        self._on_folder_dropped(root)
+        if key:
+            self.part_list._select_by_key(key)      # 已删除则保持默认第一项
+        if self._part is not None or self._group is not None:
+            self._update_matrix(direction, action)  # 新数据缺失时由矩阵兜底
+            if paused:
+                self.anim_view.set_resume_state(True, idx)
+            self._after_matrix_change()
+        self.statusBar().showMessage("📡 检测到文件变更，已自动刷新")
+
+    def _on_auto_refresh_toggled(self, checked: bool) -> None:
+        """自动刷新开关（QSettings 记忆）；关闭时移除全部目录监听。"""
+        self._auto_refresh = checked
+        self._settings.setValue("checks/auto_refresh", checked)
+        self._settings.sync()
+        if not checked:
+            self._rescan_timer.stop()
+            old = self._dir_watcher.directories()
+            if old:
+                self._dir_watcher.removePaths(old)
+        elif self._result is not None:
+            self._setup_dir_watcher(self._result.root)
+            self.statusBar().showMessage("📡 已开启自动刷新（检测外部文件变更）")
 
     # ---------------- 中文名映射 ----------------
     def _setup_namemap(self, folder: Path) -> None:
