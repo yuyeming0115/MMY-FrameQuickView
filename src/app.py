@@ -364,20 +364,42 @@ class MainWindow(QMainWindow):
         self._update_matrix(None, None)
         self._after_matrix_change()
 
-    def _on_group_selected(self, res_id: str) -> None:
+    def _on_group_selected(self, key: str) -> None:
         if self._result is None:
             return
-        grp = next((g for g in self._result.groups if g.res_id == res_id), None)
+        grp = next((g for g in self._result.groups if g.key == key), None)
         if grp is None:
             return
         self._group = grp
         self._part = None
-        # 右侧逐部件显隐 toggle（按 layer_order 从底到顶给中文名）
-        parts = {p.part or p.name: (self._namemap.part_cn(p.part) if self._namemap else p.part)
+        # 右侧逐部件显隐 toggle（按 layer_order 从底到顶给中文名）；
+        # 套装组内重名部件（如两个 shadow）用 `部件·ID` 区分 key
+        parts = {self._toggle_key(p, grp): self._toggle_label(p, grp)
                  for p in grp.parts}
         self.anim_view.show_part_toggles(parts, self._hidden_parts)
         self._update_matrix(None, None)
         self._after_matrix_change()
+
+    def _toggle_key(self, p, grp) -> str:
+        """显隐 toggle 的 key：部件名；组内重名时追加 `·ID`（与 _layers_for_current 一致）。"""
+        base = p.part or p.name
+        same = [q for q in grp.parts if (q.part or q.name) == base]
+        return base if len(same) == 1 else f"{base}·{p.res_id}"
+
+    def _toggle_label(self, p, grp) -> str:
+        base = p.part or p.name
+        key = self._toggle_key(p, grp)
+        if self._namemap is None:
+            cn, owner = p.part or "", None
+        else:
+            sibs = [(q.res_id, q.part) for q in grp.parts]
+            cn, owner = self._namemap.part_cn_in(p.part, p.res_id, sibs)
+        if key == base:
+            return cn or base
+        # 组内重名：影子归属主体后已可区分（武器影子/身体影子），其余重名补 `·ID`
+        if owner is not None:
+            return cn
+        return f"{cn or base}·{p.res_id}"
 
     def _on_part_toggled(self, part: str, visible: bool) -> None:
         if visible:
@@ -476,9 +498,10 @@ class MainWindow(QMainWindow):
             ad = self._part.action_data(direction, action)
             return [ad.frames] if ad else layers
         # 组模式：按 layer_rank 排序的 parts 各取 (d,a) 帧，shadow 自动最底；
-        # 跳过用户隐藏的部件（右侧 toggle，key 与 show_part_toggles 一致）
+        # 跳过用户隐藏的部件（右侧 toggle，key 与 show_part_toggles 一致：
+        # 部件名，套装组内重名部件为 `部件·ID`）
         for p in self._group.parts:
-            key = p.part or p.name
+            key = self._toggle_key(p, self._group)
             if key in self._hidden_parts:
                 continue
             ad = p.action_data(direction, action)
@@ -504,7 +527,8 @@ class MainWindow(QMainWindow):
         direction, action = self.matrix.current()
         segs: list[str] = []
         if self._group is not None:
-            segs.append(f"组 {self._group.res_id}（{len(self._group.parts)} 层叠合 · shadow 最底）")
+            gname = self._group.display_name or self._group.res_id
+            segs.append(f"组 {gname}（{len(self._group.parts)} 层叠合 · shadow 最底）")
             if self._group.has_issues:
                 segs.append("⚠ 配套异常")
         else:

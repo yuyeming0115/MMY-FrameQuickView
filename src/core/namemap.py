@@ -87,6 +87,29 @@ class NameMap:
             return "整体"
         return self._part_cn.get(part, part)
 
+    def shadow_owner(self, res_id: str, siblings: list[tuple[str, str | None]]) -> str | None:
+        """影子部件的归属主件（同 ID 的非 shadow/fills 部件）；body 优先于 weapon。"""
+        parts = [pt for rid, pt in siblings
+                 if rid == res_id and pt and pt not in ("shadow", "fills")]
+        for prefer in ("body", "weapon"):
+            if prefer in parts:
+                return prefer
+        return parts[0] if parts else None
+
+    def part_cn_in(self, part: str | None, res_id: str,
+                   siblings: list[tuple[str, str | None]]) -> tuple[str, str | None]:
+        """组内部件中文名 → (显示名, 归属主件 | None)。
+
+        影子归属同 ID 主件 → `武器影子` / `身体影子`（组内多个影子时可区分）；
+        其余部件与 part_cn 一致。
+        """
+        cn = self.part_cn(part)
+        if part == "shadow":
+            owner = self.shadow_owner(res_id, siblings)
+            if owner:
+                return f"{self.part_cn(owner)}{cn}", owner
+        return cn, None
+
     def char_type(self, res_id: str) -> str | None:
         """纯 ID 对应的角色类型（来自匹配表第3列）；未标注返回 None。"""
         return self._types.get(res_id)
