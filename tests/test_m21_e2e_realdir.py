@@ -42,7 +42,7 @@ w._on_group_selected("50105101")
 app.processEvents()
 d, a = w.matrix.current()
 assert d == "特效" and a == "changrao", (d, a)
-layers = w._layers_for_current()
+layers = w._layers_for_current()[0]   # M26：返回 4 元组，取 layers
 assert layers and len(layers[0]) == 20, f"20 帧: {len(layers[0]) if layers else 0}"
 print(f"[2] OK 特效组预览: 方向={d} 动作={a} 帧数={len(layers[0])}")
 
