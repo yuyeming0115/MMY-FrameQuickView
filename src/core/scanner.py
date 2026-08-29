@@ -241,7 +241,12 @@ def scan_part(folder: Path, tpl: Template, char_type_of=None) -> PartData | None
     if parsed is None:
         return None
     res_id, part = parsed
-    char_type = tpl.resolve_char_type(char_type_of(res_id) if char_type_of else None)
+    raw_type = char_type_of(res_id) if char_type_of else None
+    if raw_type:
+        char_type = tpl.resolve_char_type(raw_type)
+    else:
+        # 匹配表未标注类型 → 按模板分类规则推断（如 501 前缀 → 主角）；仍未命中用默认类型
+        char_type = tpl.infer_char_type(res_id, [part]) or tpl.default_character_type
 
     matrix: dict[str, dict[str, ActionData]] = {}
     # hierarchy: ["direction","action"]（默认）或 ["action","direction"]
@@ -445,10 +450,16 @@ def _group_parts(parts: list[PartData], tpl: Template, char_type_of=None) -> lis
     for res_id, members in by_id.items():
         # 组内排序：layer_order 越靠前（越底层）排越前
         members.sort(key=lambda p: tpl.layer_rank(p.part))
-        char_type = tpl.resolve_char_type(char_type_of(res_id) if char_type_of else None)
+        member_parts = [p.part for p in members]
+        raw_type = char_type_of(res_id) if char_type_of else None
+        if raw_type:
+            char_type = tpl.resolve_char_type(raw_type)
+        else:
+            # 匹配表未标注类型 → 按模板分类规则推断（与 scan_part 一致）
+            char_type = tpl.infer_char_type(res_id, member_parts) or tpl.default_character_type
         grp = IdGroup(res_id=res_id, parts=members, character_type=char_type)
         # 资源分类标注（左栏 chips 过滤用）：部件特征优先于 ID 前缀
-        grp.category = tpl.classify(res_id, [p.part for p in members])
+        grp.category = tpl.classify(res_id, member_parts)
         # 扁平资源组（特效类）：无方向/动作约定，跳过全部查漏，仅保留帧号断档检测
         grp.is_flat = bool(members) and all(p.is_flat for p in members)
         if grp.is_flat:

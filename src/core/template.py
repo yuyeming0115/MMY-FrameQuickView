@@ -62,8 +62,8 @@ class Template:
         return list(self.action_rules.get(char_type, {}).get(direction, []))
 
     # ---------- 分类 ----------
-    def classify(self, res_id: str, parts: list[str | None]) -> str:
-        """按 categories 有序匹配（部件特征优先于 ID 前缀）返回分类名；未命中返回空串。
+    def _match_category(self, res_id: str, parts: list[str | None]) -> dict | None:
+        """按 categories 有序匹配（部件特征优先于 ID 前缀）返回命中的分类；未命中返回 None。
 
         - part_any：组内任一部件名命中（如 ride_* → 坐骑、wings → 翅膀）
         - id_prefix：资源 ID 前缀命中（如 50105 → 特效、502 → 伙伴）
@@ -72,11 +72,26 @@ class Template:
         for cat in self.categories:
             part_any = cat.get("part_any") or []
             if part_any and any(p in part_any for p in parts):
-                return cat.get("name", "")
+                return cat
             prefixes = cat.get("id_prefix") or []
             if prefixes and any(res_id.startswith(pf) for pf in prefixes):
-                return cat.get("name", "")
-        return ""
+                return cat
+        return None
+
+    def classify(self, res_id: str, parts: list[str | None]) -> str:
+        cat = self._match_category(res_id, parts)
+        return cat.get("name", "") if cat else ""
+
+    def infer_char_type(self, res_id: str, parts: list[str | None]) -> str | None:
+        """类别推断角色类型：命中带 char_type 字段的分类时返回该类型。
+
+        用于匹配表未标注类型时的兜底（如 501 前缀 → protagonist）。
+        匹配表显式标注始终优先于类别推断；分类未配 char_type 返回 None。
+        """
+        cat = self._match_category(res_id, parts)
+        if cat is None:
+            return None
+        return cat.get("char_type") or None
 
     def flat_rule(self, res_id: str) -> dict | None:
         """资源 ID 命中的扁平结构（特效类）规则；未命中返回 None。"""
