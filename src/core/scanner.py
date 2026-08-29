@@ -126,6 +126,10 @@ class ScanResult:
     parts: list[PartData] = field(default_factory=list)
     groups: list[IdGroup] = field(default_factory=list)
     ignored: list[str] = field(default_factory=list)   # 不匹配模板的子文件夹名
+    # 全局特效库（M26）：所有 is_flat 特效，无论物理位置（套装目录内 / 最外层
+    # 独立文件夹 / 任意深度），统一收集，供任意套装"穿戴"选择。
+    # 特效是通用资源，不应要求复制到每个套装目录。
+    fx_library: list[PartData] = field(default_factory=list)
 
 
 def _scan_action_folder(action_dir: Path, tpl: Template) -> ActionData:
@@ -402,6 +406,8 @@ def scan_root(root: Path, tpl: Template, char_type_of=None, max_depth: int = 6) 
     if single is not None:
         result = ScanResult(root=root.parent, parts=[single])
         result.groups = _group_parts(result.parts, tpl, char_type_of)
+        # 拖入的本身是特效 → 也进全局库（M26）
+        result.fx_library = [p for p in result.parts if p.is_flat]
         return result
 
     # 情况2：父级 / 多级目录 → 递归收集部件单元（散件 / 套装）
@@ -419,6 +425,9 @@ def scan_root(root: Path, tpl: Template, char_type_of=None, max_depth: int = 6) 
             else:
                 result.ignored.append(pf.name)
     result.groups = _group_parts(result.parts, tpl, char_type_of, outfit_by_parent)
+    # 全局特效库（M26）：扫到的所有 flat 特效，无论物理位置。
+    # 套装目录内的特效照常被 M25 自动并入套装组，同时也进库供其他套装穿戴。
+    result.fx_library = [p for p in result.parts if p.is_flat]
     return result
 
 
