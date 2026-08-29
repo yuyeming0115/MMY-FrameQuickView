@@ -84,6 +84,12 @@ class MainWindow(QMainWindow):
         self._fx_library: list[PartData] = []
         self._fx_by_key: dict[str, PartData] = {}
         self._dressed_fx: dict[str, str] = self._load_dressed_fx()
+        # M28：全局翅膀库（所有 wings 部件，无论物理位置）与套装穿戴选择
+        self._wing_library: list[PartData] = []
+        self._wing_by_key: dict[str, PartData] = {}
+        self._dressed_wings: dict[str, str] = self._load_dressed_wings()
+        # M28：真正的特效层下标（穿戴的翅膀也算 flat 层，但不需要微调 → 排除）
+        self._fx_layer_indices: set[int] = set()
         # fills 警告检测开关：NPC/翅膀/主角/坐骑等无 fills 部件的资源可关闭降噪（QSettings 记忆）
         self._fills_check = bool(self._settings.value("checks/fills", True, type=bool))
         # 重启兜底：上次的匹配表/拖入目录如果还存在，自动恢复
@@ -188,6 +194,7 @@ class MainWindow(QMainWindow):
         self.anim_view.part_toggles_signal().connect(self._on_part_toggled)
         self.anim_view.fx_offset_changed.connect(self._on_fx_offset_changed)
         self.anim_view.fx_dressed_signal().connect(self._on_fx_dressed)  # M26 穿戴特效
+        self.anim_view.wing_dressed_signal().connect(self._on_wing_dressed)  # M28 穿戴翅膀
         panes.addWidget(self.grid_view)
         panes.addWidget(self.anim_view)
         panes.setStretchFactor(0, 5)
@@ -221,6 +228,9 @@ class MainWindow(QMainWindow):
         # 独立文件夹），供任意套装穿戴，无需复制到每个套装目录。
         self._fx_library = list(self._result.fx_library)
         self._fx_by_key = {p.name: p for p in self._fx_library}
+        # M28：全局翅膀库——所有 wings 部件，无论物理位置，供任意套装穿戴
+        self._wing_library = list(self._result.wing_library)
+        self._wing_by_key = {p.name: p for p in self._wing_library}
         self.drop.set_current(str(folder))
         self._setup_namemap(folder)
         self.part_list.set_namemap(self._namemap)
@@ -484,6 +494,11 @@ class MainWindow(QMainWindow):
             [(p.name, self._fx_display_name(p)) for p in self._fx_library],
             self._dressed_fx.get(grp.key, ""),
         )
+        # M28：注入全局翅膀库下拉框，并恢复该套装上次穿戴的翅膀
+        self.anim_view.set_wing_library(
+            [(p.name, self._wing_display_name(p)) for p in self._wing_library],
+            self._dressed_wings.get(grp.key, ""),
+        )
         self._update_matrix(None, None)
         self._after_matrix_change()
 
@@ -542,6 +557,25 @@ class MainWindow(QMainWindow):
             name, tip = "无", ""
         gname = self._group.display_name or self._group.key
         self.statusBar().showMessage(f"✨ 套装「{gname}」穿戴特效：{name}{tip}", 3000)
+        self._after_matrix_change()
+
+    def _on_wing_dressed(self, wing_key: str) -> None:
+        """M28：穿戴翅膀下拉框切换 → 记到当前套装并刷新预览。
+
+        与特效同机制：选择按套装 key 记忆（QSettings），切换套装自动恢复。
+        区别：翅膀按 (方向,动作) 取帧，方向动作本来就对齐 → **不提供偏移微调**。
+        """
+        if self._group is None:
+            return
+        self._dressed_wings[self._group.key] = wing_key
+        self._save_dressed_wings(self._group.key, wing_key)
+        if wing_key:
+            wing = self._wing_by_key.get(wing_key)
+            name = self._wing_display_name(wing) if wing is not None else wing_key
+        else:
+            name = "无"
+        gname = self._group.display_name or self._group.key
+        self.statusBar().showMessage(f"🕊 套装「{gname}」穿戴翅膀：{name}", 3000)
         self._after_matrix_change()
 
     def _on_fx_offset_changed(self, part_key: str, dx: int, dy: int) -> None:
@@ -659,6 +693,8 @@ class MainWindow(QMainWindow):
                 part_keys = [self._part.name]
                 if self._part.is_flat:
                     fx_offsets = {0: self._get_fx_offset(self._part.name)}
+            # M28：单部件视图下，特效自身就是可微调层
+            self._fx_layer_indices = {0} if self._part.is_flat else set()
             return layers, flat_mask, fx_offsets, part_keys
         # 组模式：按 layer_rank 排序的 parts 各取 (d,a) 帧
         for p in self._group.parts:
@@ -674,8 +710,14 @@ class MainWindow(QMainWindow):
             part_keys.append(key)
             if p.is_flat:
                 fx_offsets[idx] = self._get_fx_offset(key)
-        # M26：追加穿戴的全局特效为顶层 flat 层
-        self._append_dressed_fx(layers, flat_mask, fx_offsets, part_keys)
+        # M28：记录「真正的特效层」下标（组内 flat 部件）——穿戴的翅膀虽也是
+        # flat 层，但按 (方向,动作) 取帧、对齐本就准确，不参与 Ctrl+方向键微调。
+        self._fx_layer_indices = {i for i, f in enumerate(flat_mask) if f}
+        # M28：先追加穿戴的翅膀（在角色之上）→ 再追加穿戴特效（置顶最上层）
+        self._append_dressed_wings(layers, flat_mask, fx_offsets, part_keys)
+        idx = self._append_dressed_fx(layers, flat_mask, fx_offsets, part_keys)
+        if idx is not None:
+            self._fx_layer_indices.add(idx)   # 穿戴的特效可微调
         return layers, flat_mask, fx_offsets, part_keys
 
     def _append_dressed_fx(
@@ -684,31 +726,75 @@ class MainWindow(QMainWindow):
         flat_mask: list[bool],
         fx_offsets: dict[int, tuple[int, int]],
         part_keys: list[str],
-    ) -> None:
-        """M26：把当前套装「穿戴」的特效追加为顶层 flat 层（原地修改传入列表）。
+    ) -> int | None:
+        """M26：把当前套装「穿戴」的特效追加为顶层 flat 层（原地修改传入列表）。"""
+        if self._group is None:
+            return None
+        return self._append_dressed_part(
+            layers, flat_mask, fx_offsets, part_keys,
+            self._dressed_fx.get(self._group.key, ""), self._fx_by_key,
+        )
 
-        - 特效 key 取自 _dressed_fx[套装key]；为空或找不到则不追加
-        - 该特效若已在本组内（M25 自动并入的旧目录结构）→ 跳过，避免重复叠加
-        - 偏移按**特效名**存取 → 同一特效调一次偏移，所有套装复用
+    def _append_dressed_wings(
+        self,
+        layers: list[list[Path]],
+        flat_mask: list[bool],
+        fx_offsets: dict[int, tuple[int, int]],
+        part_keys: list[str],
+    ) -> int | None:
+        """M28：把当前套装「穿戴」的翅膀追加为顶层 flat 层（原地修改传入列表）。
+
+        与特效同机制，但翅膀是**常规资源**（有方向/动作层级）→ 按当前
+        (方向,动作) 取帧，因此方向动作天然对齐，**不提供偏移微调**。
         """
         if self._group is None:
-            return
-        fx_key = self._dressed_fx.get(self._group.key, "")
-        if not fx_key:
-            return
-        fx = self._fx_by_key.get(fx_key)
-        if fx is None:
-            return
-        if any(p.name == fx.name for p in self._group.parts):
-            return                      # 已在组内，不重复叠加
-        ad = next((a for col in fx.matrix.values() for a in col.values()), None)
+            return None
+        return self._append_dressed_part(
+            layers, flat_mask, fx_offsets, part_keys,
+            self._dressed_wings.get(self._group.key, ""), self._wing_by_key,
+        )
+
+    def _append_dressed_part(
+        self,
+        layers: list[list[Path]],
+        flat_mask: list[bool],
+        fx_offsets: dict[int, tuple[int, int]],
+        part_keys: list[str],
+        dress_key: str,
+        by_key: dict[str, PartData],
+    ) -> int | None:
+        """M26/M28：把「穿戴」的全局资源追加为顶层 flat 层（原地修改传入列表）。
+
+        - key 取自 dressed 映射[套装key]；为空或找不到 → 不追加
+        - 该资源若已在本组内（旧目录结构自动并入）→ 跳过，避免重复叠加
+        - **取帧方式**：flat 资源（特效）取自身序列；常规资源（翅膀）按当前
+          (方向,动作) 取帧，缺失时退回该资源的第一个可用组合
+        - 一律 flat_mask=True：穿戴的是独立资源，需按 bbox 与角色居中对齐
+        - 偏移按**资源名**存取 → 同一资源调一次偏移，所有套装复用
+        - 返回追加到的层下标（未追加返回 None），供调用方标记可微调的特效层
+        """
+        if not dress_key:
+            return None
+        p = by_key.get(dress_key)
+        if p is None:
+            return None
+        if any(q.name == p.name for q in self._group.parts):
+            return None                      # 已在组内，不重复叠加
+        direction, action = self.matrix.current()
+        if p.is_flat:
+            ad = next((a for col in p.matrix.values() for a in col.values()), None)
+        else:
+            ad = p.action_data(direction, action)
+            if ad is None:
+                ad = next((a for col in p.matrix.values() for a in col.values()), None)
         if ad is None or not ad.frames:
-            return
+            return None
         idx = len(layers)
         layers.append(ad.frames)
         flat_mask.append(True)
-        part_keys.append(fx.name)
-        fx_offsets[idx] = self._get_fx_offset(fx.name)
+        part_keys.append(p.name)
+        fx_offsets[idx] = self._get_fx_offset(p.name)
+        return idx
 
     def _load_dressed_fx(self) -> dict[str, str]:
         """M26：从 QSettings 读取各套装的穿戴特效选择 {套装key: 特效key}。"""
@@ -732,6 +818,26 @@ class MainWindow(QMainWindow):
             if cn:
                 return cn
         return p.name
+
+    def _wing_display_name(self, p) -> str:
+        """M28：翅膀在穿戴下拉框里的显示名（中文名·翅膀，无映射兜底文件夹名）。"""
+        cn = self._namemap.lookup(p.name, p.res_id) if self._namemap is not None else None
+        return f"{cn}·翅膀" if cn else p.name
+
+    def _load_dressed_wings(self) -> dict[str, str]:
+        """M28：从 QSettings 读取各套装的穿戴翅膀选择 {套装key: 翅膀key}。"""
+        self._settings.beginGroup("layering/dressed_wings")
+        out = {k: self._settings.value(k, "", type=str)
+               for k in self._settings.childKeys()}
+        self._settings.endGroup()
+        return out
+
+    def _save_dressed_wings(self, group_key: str, wing_key: str) -> None:
+        """M28：保存某套装的穿戴翅膀选择；空串表示不穿戴。"""
+        self._settings.beginGroup("layering/dressed_wings")
+        self._settings.setValue(group_key, wing_key)
+        self._settings.endGroup()
+        self._settings.sync()
 
     def _get_fx_offset(self, key: str) -> tuple[int, int]:
         """从 QSettings 读取某部件的特效偏移量，默认 (0,0)。"""
@@ -760,6 +866,8 @@ class MainWindow(QMainWindow):
         # M26：part_keys 由 _layers_for_current 一并产出，天然与 layers 同序
         layers, flat_mask, fx_offsets, part_keys = self._layers_for_current()
         self.anim_view.set_fx_part_keys(part_keys)
+        # M28：告知画布哪些层是真特效（Ctrl+方向键微调目标），穿戴翅膀会被排除
+        self.anim_view.set_fx_layer_indices(self._fx_layer_indices)
         self.anim_view.show_sequence(layers, flat_mask, fx_offsets)
 
     def _refresh_status(self) -> None:
