@@ -73,14 +73,14 @@ def main():
         win._update_matrix("E", "idle")   # 固定有效组合，避免依赖 QSettings 恢复态
         parts_keys = [p.part or p.name for p in grp.parts]
         assert sorted(parts_keys) == ["body", "fills", "shadow"], parts_keys
-        n_all = win._layers_for_current()
+        n_all = win._layers_for_current()[0]   # M26：返回 4 元组，取 layers
         assert len(n_all) == 3, f"默认应 3 层，实际 {len(n_all)}"
         print("  parts:", parts_keys, "  layers:", len(n_all))
         print("  ✓ 默认全显 3 层")
 
         print("\n== 情况 B：隐藏 fills → 2 层，仍含 body/shadow ==")
         win._hidden_parts = {"fills"}
-        layers = win._layers_for_current()
+        layers = win._layers_for_current()[0]
         assert len(layers) == 2, f"隐藏 fills 后应 2 层，实际 {len(layers)}"
         assert not any(len(x) == 0 for x in layers), "过滤后每层都应有帧"
         print(f"  隐藏 fills → layers={len(layers)}")
@@ -88,7 +88,7 @@ def main():
 
         print("\n== 情况 C：隐藏 shadow 后再隐藏 body → 只剩 fills ==")
         win._hidden_parts = {"shadow", "body"}
-        layers2 = win._layers_for_current()
+        layers2 = win._layers_for_current()[0]
         assert len(layers2) == 1, f"应只剩 fills 1 层，实际 {len(layers2)}"
         print("  ✓ 任意层均可隐藏")
 

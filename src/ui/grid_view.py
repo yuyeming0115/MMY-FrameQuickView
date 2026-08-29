@@ -269,7 +269,12 @@ class GridView(QFrame):
         self._loaded: list[tuple[QPixmap, str, int]] = []  # (pixmap, label, idx)
         self._max_w = self._max_h = 0  # 原图最大尺寸
 
-    def show_sequence(self, layers: list[list[Path]]) -> None:
+    def show_sequence(
+        self,
+        layers: list[list[Path]],
+        flat_mask: list[bool] | None = None,
+        fx_offsets: dict[int, tuple[int, int]] | None = None,
+    ) -> None:
         """layers[0] 为最底层；单层即普通序列，多层即同 ID 叠层合成。
 
         切换体验（M6）：**延迟清空 + 整体替换**——保留旧画面直到新序列
@@ -282,7 +287,7 @@ class GridView(QFrame):
             return
         self._title.setText("A · 序列帧网格 · 解码中…")
         self._pending = []
-        self._worker = DecodeWorker(layers)
+        self._worker = DecodeWorker(layers, flat_mask=flat_mask, fx_offsets=fx_offsets)
         self._worker.frame_ready.connect(self._on_frame)
         self._worker.finished.connect(self._on_done)
         self._worker.start()
