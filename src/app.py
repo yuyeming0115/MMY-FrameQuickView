@@ -80,6 +80,10 @@ class MainWindow(QMainWindow):
         self._last_map_file: Path | None = None    # 最近一次成功加载的匹配表
         # 组视图右侧 toggle 中用户隐藏的部件层（QSettings 记忆）
         self._hidden_parts: set[str] = set(self._settings.value("layering/hidden_parts", [], type=list))
+        # M26：全局特效库（所有 flat 特效，无论物理位置）与套装穿戴选择
+        self._fx_library: list[PartData] = []
+        self._fx_by_key: dict[str, PartData] = {}
+        self._dressed_fx: dict[str, str] = self._load_dressed_fx()
         # fills 警告检测开关：NPC/翅膀/主角/坐骑等无 fills 部件的资源可关闭降噪（QSettings 记忆）
         self._fills_check = bool(self._settings.value("checks/fills", True, type=bool))
         # 重启兜底：上次的匹配表/拖入目录如果还存在，自动恢复
@@ -182,6 +186,8 @@ class MainWindow(QMainWindow):
         self.anim_view.direction_overlay_clicked.connect(self._on_direction_selected)
         self.anim_view.set_matrix_widget(self.matrix)
         self.anim_view.part_toggles_signal().connect(self._on_part_toggled)
+        self.anim_view.fx_offset_changed.connect(self._on_fx_offset_changed)
+        self.anim_view.fx_dressed_signal().connect(self._on_fx_dressed)  # M26 穿戴特效
         panes.addWidget(self.grid_view)
         panes.addWidget(self.anim_view)
         panes.setStretchFactor(0, 5)
@@ -211,6 +217,10 @@ class MainWindow(QMainWindow):
             return
         self._last_folder = folder
         self._result = scan_root(folder, self._tpl, char_type_of=self._namemap.char_type)
+        # M26：全局特效库——所有 flat 特效，无论物理位置（套装目录内 / 最外层
+        # 独立文件夹），供任意套装穿戴，无需复制到每个套装目录。
+        self._fx_library = list(self._result.fx_library)
+        self._fx_by_key = {p.name: p for p in self._fx_library}
         self.drop.set_current(str(folder))
         self._setup_namemap(folder)
         self.part_list.set_namemap(self._namemap)
@@ -469,6 +479,11 @@ class MainWindow(QMainWindow):
         parts = {self._toggle_key(p, grp): self._toggle_label(p, grp)
                  for p in grp.parts}
         self.anim_view.show_part_toggles(parts, self._hidden_parts)
+        # M26：注入全局特效库下拉框，并恢复该套装上次穿戴的特效
+        self.anim_view.set_fx_library(
+            [(p.name, self._fx_display_name(p)) for p in self._fx_library],
+            self._dressed_fx.get(grp.key, ""),
+        )
         self._update_matrix(None, None)
         self._after_matrix_change()
 
@@ -508,6 +523,35 @@ class MainWindow(QMainWindow):
         self._settings.setValue("layering/hidden_parts", sorted(self._hidden_parts))
         self._settings.sync()
         self._after_matrix_change()
+
+    def _on_fx_dressed(self, fx_key: str) -> None:
+        """M26：穿戴特效下拉框切换 → 记到当前套装并刷新预览。
+
+        选择按套装 key 记忆（QSettings），切换套装时自动恢复；
+        偏移按特效名存取，同一特效调一次所有套装复用。
+        """
+        if self._group is None:
+            return
+        self._dressed_fx[self._group.key] = fx_key
+        self._save_dressed_fx(self._group.key, fx_key)
+        if fx_key:
+            fx = self._fx_by_key.get(fx_key)
+            name = self._fx_display_name(fx) if fx is not None else fx_key
+            tip = " ｜ Ctrl+方向键微调位置"
+        else:
+            name, tip = "无", ""
+        gname = self._group.display_name or self._group.key
+        self.statusBar().showMessage(f"✨ 套装「{gname}」穿戴特效：{name}{tip}", 3000)
+        self._after_matrix_change()
+
+    def _on_fx_offset_changed(self, part_key: str, dx: int, dy: int) -> None:
+        """特效偏移微调回调：保存到 QSettings 并刷新显示。"""
+        self._set_fx_offset(part_key, dx, dy)
+        self.statusBar().showMessage(
+            f"✨ 特效偏移 [{part_key}] → ({dx:+d}, {dy:+d}) ｜ "
+            f"提示：Ctrl+方向键微调", 3000)
+        # 重新加载动画以应用新偏移（不重新解码文件，只重合成）
+        self._show_anim()
 
     def _on_fills_check_toggled(self, checked: bool) -> None:
         """fills 警告检测开关：即时刷新左栏橙点与状态栏（QSettings 记忆）。"""
@@ -587,40 +631,136 @@ class MainWindow(QMainWindow):
                     return ad
         return None
 
-    def _layers_for_current(self) -> list[list[Path]]:
-        """按当前 (组/部件) + (方向,动作) 计算各层帧序列。"""
+    def _layers_for_current(self) -> tuple[
+        list[list[Path]], list[bool], dict[int, tuple[int, int]], list[str]
+    ]:
+        """按当前 (组/部件) + (方向,动作) 算各层帧序列 + 特效 mask + 偏移 + part keys。
+
+        返回 (layers, flat_mask, fx_offsets, part_keys)：
+        - flat_mask[i]=True 表示第 i 层是特效层
+        - fx_offsets[i] = (dx, dy) 用户微调偏移（仅特效层有值）
+        - part_keys[i] = 第 i 层 key（与 layers 严格同序，偏移微调靠它定位）
+
+        M26：组模式把「穿戴」的全局特效追加为顶层 flat 层。part_keys 在此一并
+        产出，避免调用方与合成链各算一份导致顺序错位（微调会作用到错误的层）。
+        """
         layers: list[list[Path]] = []
+        flat_mask: list[bool] = []
+        fx_offsets: dict[int, tuple[int, int]] = {}
+        part_keys: list[str] = []
         direction, action = self.matrix.current()
         if not direction or not action:
-            return layers
+            return layers, flat_mask, fx_offsets, part_keys
         if self._part is not None:
             ad = self._part.action_data(direction, action)
-            return [ad.frames] if ad else layers
-        # 组模式：按 layer_rank 排序的 parts 各取 (d,a) 帧，shadow 自动最底；
-        # 跳过用户隐藏的部件（右侧 toggle，key 与 show_part_toggles 一致：
-        # 部件名，套装组内重名部件为 `部件·ID`）
+            if ad:
+                layers = [ad.frames]
+                flat_mask = [self._part.is_flat]
+                part_keys = [self._part.name]
+                if self._part.is_flat:
+                    fx_offsets = {0: self._get_fx_offset(self._part.name)}
+            return layers, flat_mask, fx_offsets, part_keys
+        # 组模式：按 layer_rank 排序的 parts 各取 (d,a) 帧
         for p in self._group.parts:
             key = self._toggle_key(p, self._group)
             if key in self._hidden_parts:
                 continue
             ad = p.action_data(direction, action)
             if ad is None and p.is_flat:
-                # 特效层（M25）：无方向/动作约定，任何组合下都取自身序列叠顶层
                 ad = next((a for col in p.matrix.values() for a in col.values()), None)
+            idx = len(layers)
             layers.append(ad.frames if ad else [])
-        return layers
+            flat_mask.append(p.is_flat)
+            part_keys.append(key)
+            if p.is_flat:
+                fx_offsets[idx] = self._get_fx_offset(key)
+        # M26：追加穿戴的全局特效为顶层 flat 层
+        self._append_dressed_fx(layers, flat_mask, fx_offsets, part_keys)
+        return layers, flat_mask, fx_offsets, part_keys
+
+    def _append_dressed_fx(
+        self,
+        layers: list[list[Path]],
+        flat_mask: list[bool],
+        fx_offsets: dict[int, tuple[int, int]],
+        part_keys: list[str],
+    ) -> None:
+        """M26：把当前套装「穿戴」的特效追加为顶层 flat 层（原地修改传入列表）。
+
+        - 特效 key 取自 _dressed_fx[套装key]；为空或找不到则不追加
+        - 该特效若已在本组内（M25 自动并入的旧目录结构）→ 跳过，避免重复叠加
+        - 偏移按**特效名**存取 → 同一特效调一次偏移，所有套装复用
+        """
+        if self._group is None:
+            return
+        fx_key = self._dressed_fx.get(self._group.key, "")
+        if not fx_key:
+            return
+        fx = self._fx_by_key.get(fx_key)
+        if fx is None:
+            return
+        if any(p.name == fx.name for p in self._group.parts):
+            return                      # 已在组内，不重复叠加
+        ad = next((a for col in fx.matrix.values() for a in col.values()), None)
+        if ad is None or not ad.frames:
+            return
+        idx = len(layers)
+        layers.append(ad.frames)
+        flat_mask.append(True)
+        part_keys.append(fx.name)
+        fx_offsets[idx] = self._get_fx_offset(fx.name)
+
+    def _load_dressed_fx(self) -> dict[str, str]:
+        """M26：从 QSettings 读取各套装的穿戴特效选择 {套装key: 特效key}。"""
+        self._settings.beginGroup("layering/dressed_fx")
+        out = {k: self._settings.value(k, "", type=str)
+               for k in self._settings.childKeys()}
+        self._settings.endGroup()
+        return out
+
+    def _save_dressed_fx(self, group_key: str, fx_key: str) -> None:
+        """M26：保存某套装的穿戴特效选择；空串表示不穿戴。"""
+        self._settings.beginGroup("layering/dressed_fx")
+        self._settings.setValue(group_key, fx_key)
+        self._settings.endGroup()
+        self._settings.sync()
+
+    def _fx_display_name(self, p) -> str:
+        """M26：特效在穿戴下拉框里的显示名（匹配表中文名，无映射兜底文件夹名）。"""
+        if self._namemap is not None:
+            cn = self._namemap.lookup(p.name, p.res_id)
+            if cn:
+                return cn
+        return p.name
+
+    def _get_fx_offset(self, key: str) -> tuple[int, int]:
+        """从 QSettings 读取某部件的特效偏移量，默认 (0,0)。"""
+        val = self._settings.value(f"layering/fx_offset/{key}", "0,0", type=str)
+        try:
+            dx, dy = val.split(",")
+            return int(dx.strip()), int(dy.strip())
+        except (ValueError, AttributeError):
+            return 0, 0
+
+    def _set_fx_offset(self, key: str, dx: int, dy: int) -> None:
+        """保存特效偏移量到 QSettings。"""
+        self._settings.setValue(f"layering/fx_offset/{key}", f"{dx},{dy}")
+        self._settings.sync()
 
     def _show_grid(self) -> None:
-        """按当前 (组/部件) + (方向,动作) 计算各层帧序列，交给 GridView 渲染。"""
         if self._group is None and self._part is None:
             return
-        self.grid_view.show_sequence(self._layers_for_current())
+        layers, flat_mask, fx_offsets, _keys = self._layers_for_current()
+        self.grid_view.show_sequence(layers, flat_mask, fx_offsets)
 
     def _show_anim(self) -> None:
         """B 区同步加载当前组合的动画。"""
         if self._group is None and self._part is None:
             return
-        self.anim_view.show_sequence(self._layers_for_current())
+        # M26：part_keys 由 _layers_for_current 一并产出，天然与 layers 同序
+        layers, flat_mask, fx_offsets, part_keys = self._layers_for_current()
+        self.anim_view.set_fx_part_keys(part_keys)
+        self.anim_view.show_sequence(layers, flat_mask, fx_offsets)
 
     def _refresh_status(self) -> None:
         """状态栏：帧数 / 帧号连续性 / 缺漏 / 配套摘要。"""

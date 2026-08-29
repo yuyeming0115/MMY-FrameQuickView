@@ -90,13 +90,14 @@ try:
     from src.app import MainWindow
     win = MainWindow()
     win._on_folder_dropped(outfit)
+    win._hidden_parts = set()      # 清 QSettings 残留隐藏项，保证断言稳定
     win._on_group_selected(g.key)
     from tests.smoke_gui import _wait_workers
     _wait_workers(win)
 
     d, a = win.matrix.current()
     assert (d, a) == ("E", "idle"), (d, a)
-    layers = win._layers_for_current()
+    layers = win._layers_for_current()[0]   # M26：返回 4 元组，取 layers
     assert len(layers) == 6, f"6 层（5 部件 + 1 特效）: {len(layers)}"
     assert layers[-1] and len(layers[-1]) == 3, "特效层应为自身 3 帧"
     body_idx = [i for i, p in enumerate(win._group.parts) if p.part == "body"][0]
