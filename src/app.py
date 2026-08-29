@@ -481,6 +481,13 @@ class MainWindow(QMainWindow):
     def _toggle_label(self, p, grp) -> str:
         base = p.part or p.name
         key = self._toggle_key(p, grp)
+        if p.is_flat:
+            # 特效层：显示匹配表中文名（如 游龙「环绕特效」），无映射兜底「特效」
+            if self._namemap is not None:
+                cn = self._namemap.lookup(p.name, p.res_id) or "特效"
+            else:
+                cn = "特效"
+            return cn
         if self._namemap is None:
             cn, owner = p.part or "", None
         else:
@@ -597,6 +604,9 @@ class MainWindow(QMainWindow):
             if key in self._hidden_parts:
                 continue
             ad = p.action_data(direction, action)
+            if ad is None and p.is_flat:
+                # 特效层（M25）：无方向/动作约定，任何组合下都取自身序列叠顶层
+                ad = next((a for col in p.matrix.values() for a in col.values()), None)
             layers.append(ad.frames if ad else [])
         return layers
 
@@ -621,6 +631,11 @@ class MainWindow(QMainWindow):
         if self._group is not None:
             gname = self._group.display_name or self._group.res_id
             segs.append(f"组 {gname}（{len(self._group.parts)} 层叠合 · shadow 最底）")
+            fxs = [p for p in self._group.parts if p.is_flat]
+            if fxs:
+                fx_ad = next((a for p in fxs for col in p.matrix.values() for a in col.values()), None)
+                if fx_ad:
+                    segs.append(f"✨ 特效层 {fx_ad.count} 帧·置顶")
             if self._group.has_issues:
                 segs.append("⚠ 配套异常")
         else:

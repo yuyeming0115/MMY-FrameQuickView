@@ -430,7 +430,8 @@ def _find_part_units(root: Path, tpl: Template, max_depth: int) -> list[tuple[Pa
     - 套装判定（M23）：某文件夹直接子项里的叶子部件 ≥2 个、跨 ≥2 个资源 ID、
       总数 ≤ tpl.outfit_merge_max → 这些部件归属一个套装单元（parent = 该文件夹）；
       超阈值（如 角色输出图 221 件）→ 降级为散件（parent=None，按 ID 分组）。
-      特效扁平文件夹一律按散件处理，不参与套装合并。
+    - 特效层（M25）：同文件夹下的扁平特效文件夹并入套装单元（part=None →
+      layer_rank 最大 → 渲染置顶）；无套装（散件/超阈值）时特效维持独立散件。
     """
     units: list[tuple[Path | None, list[Path]]] = []
     stack: list[tuple[Path, int]] = [(root, 0)]
@@ -443,13 +444,14 @@ def _find_part_units(root: Path, tpl: Template, max_depth: int) -> list[tuple[Pa
         except (PermissionError, OSError):
             continue
         leaves: list[Path] = []
+        flats: list[Path] = []
         for c in children:
             if not c.is_dir():
                 continue
             if _is_leaf_part_folder(c, tpl):
                 leaves.append(c)                # 叶子部件文件夹：收集，不继续下钻
             elif _is_flat_folder(c, tpl):
-                units.append((None, [c]))       # 扁平结构资源（特效类）：按散件
+                flats.append(c)                 # 特效扁平资源：候选套装置顶层
             else:
                 stack.append((c, depth + 1))    # 角色/分类/ID壳文件夹：继续递归
         if leaves:
@@ -460,14 +462,20 @@ def _find_part_units(root: Path, tpl: Template, max_depth: int) -> list[tuple[Pa
                 if parsed:
                     ids.add(parsed[0])
                     cats.add(tpl.classify(parsed[0], [parsed[1]]))
-            # 套装判定：≥2 部件、跨 ≥2 ID、≤阈值、全部同一资源类别（如全主角）。
+            # 套装判定：≥2 部件、跨 ≥2 ID、≤阈值（含特效层）、全部同一资源类别（如全主角）。
             # 「同类别」排除混放堆（翅膀+坐骑+主角…不同角色的部件扔一个文件夹），
             # 也排除大库（角色输出图 跨 190+ ID 混多类别）；名字解析失败的部件不参与判定。
-            if (len(leaves) >= 2 and len(ids) >= 2 and len(leaves) <= tpl.outfit_merge_max
+            if (len(leaves) >= 2 and len(ids) >= 2
+                    and len(leaves) + len(flats) <= tpl.outfit_merge_max
                     and len(cats) == 1 and "" not in cats):
-                units.append((d, leaves))       # 套装单元：同父跨 ID 部件
+                units.append((d, leaves + flats))   # 套装单元 + 特效置顶层
             else:
                 units.append((None, leaves))    # 散件：维持按 ID 分组
+                for f in flats:
+                    units.append((None, [f]))   # 特效未并入套装 → 独立散件
+        else:
+            for f in flats:
+                units.append((None, [f]))       # 无套装部件：特效独立散件
     return units
 
 
@@ -584,7 +592,8 @@ def _finalize_group(grp: IdGroup, tpl: Template) -> None:
     for d, acts in extra_per_dir.items():
         grp.extra_actions[d] = sorted(acts)
     # 组级 fills 警告：组内存在主体部件，但整组无 fills → 缺 fills（警告级）
-    non_fill_parts = [p for p in members if p.part != "fills"]
+    # 特效层（flat）不进基准：虚拟方向「特效」不算「缺 fills」的方向。
+    non_fill_parts = [p for p in members if p.part != "fills" and not p.is_flat]
     fills_parts = [p for p in members if p.part == "fills"]
     if non_fill_parts and not fills_parts:
         nf_dirs: set[str] = set()
@@ -603,8 +612,15 @@ def _finalize_group(grp: IdGroup, tpl: Template) -> None:
 
 
 def _check_pairing(members: list[PartData]) -> list[str]:
-    """同 ID 配套校验：主体部件拥有的 (方向,动作)，shadow 等底层部件是否也具备。"""
+    """同 ID 配套校验：主体部件拥有的 (方向,动作)，shadow 等底层部件是否也具备。
+
+    特效层（flat）跳过：其虚拟方向/动作与套装部件无关，不进并集参照，
+    否则会把全组误报成配套异常。
+    """
     issues: list[str] = []
+    members = [p for p in members if not p.is_flat]
+    if len(members) < 2:
+        return issues
     # 以组内所有部件的并集为参照
     union: set[tuple[str, str]] = set()
     for p in members:

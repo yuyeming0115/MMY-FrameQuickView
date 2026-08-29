@@ -258,8 +258,14 @@ class PartList(QFrame):
                 # 影子归属：组内同 ID 主件（武器影子/身体影子），套装跨 ID 双影子可区分
                 sibs = [(q.res_id, q.part) for q in grp.parts]
                 for pd in grp.parts:
-                    cn, _ = (self._namemap.part_cn_in(pd.part, pd.res_id, sibs)
-                             if self._namemap else (pd.part or "（整体资源）", None))
+                    if pd.is_flat:
+                        # 特效层（M25）：显示匹配表中文名（如 游龙「环绕特效」），兜底「特效」
+                        cn = (self._namemap.lookup(pd.name, pd.res_id) or "特效") \
+                            if self._namemap else "特效"
+                    elif self._namemap:
+                        cn, _ = self._namemap.part_cn_in(pd.part, pd.res_id, sibs)
+                    else:
+                        cn = pd.part or "（整体资源）"
                     if grp.is_outfit:
                         # 套装组跨 ID：子项 = `ID 中文`（如 501031005 武器影子）
                         label = f"{pd.res_id} {cn}"
