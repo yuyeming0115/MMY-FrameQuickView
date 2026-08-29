@@ -510,6 +510,8 @@ class AnimView(QFrame):
         self._on_fps_changed(12)
         self._pending_frames: list[QPixmap] = []   # 新序列解码中缓存（整体替换用）
         self._pending_labels: list[str] = []
+        self._resume_paused = False                 # M24 自动刷新：解码后恢复暂停态（一次性）
+        self._resume_idx = 0
 
     # ---------------- 公共 API ----------------
     def set_matrix_widget(self, widget) -> None:
@@ -606,6 +608,15 @@ class AnimView(QFrame):
         self._pause()
         self._set_index(idx)
 
+    def set_resume_state(self, paused: bool, idx: int) -> None:
+        """下一次序列解码完成后的恢复方式（M24 自动刷新用，一次性）。
+
+        paused=True：恢复到暂停态并跳到第 idx 帧（clamp 到有效范围），用于
+        重扫前正在逐帧对照的场景；默认（False）解码完成后自动播放不变。
+        """
+        self._resume_paused = paused
+        self._resume_idx = idx
+
     # ---------------- 内部 ----------------
     def _stop_worker(self) -> None:
         if self._worker is not None and self._worker.isRunning():
@@ -629,6 +640,12 @@ class AnimView(QFrame):
         self._pending_labels = []
         self._title.setText(f"B · GIF 动画预览（{total} 帧 · 并集 bbox · 防抖动）")
         if not self._frames:
+            return
+        resume_paused = self._resume_paused
+        resume_idx = self._resume_idx
+        self._resume_paused = False      # 一次性，只对下一帧序列生效
+        if resume_paused:
+            self.goto_frame(min(resume_idx, len(self._frames) - 1))
             return
         self._index = 0
         self._canvas.set_frame(self._frames[0])
