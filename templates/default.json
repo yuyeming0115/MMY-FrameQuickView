@@ -22,9 +22,9 @@
   "default_character_type": "non_protagonist",
   "action_rules": {
     "protagonist": {
-      "E": ["idle", "attack", "run"],
-      "N": ["idle", "attack", "run"],
-      "S": ["idle", "attack", "run"],
+      "E": ["idle", "attack", "run", "ride_idle", "ride_run"],
+      "N": ["idle", "attack", "run", "ride_idle", "ride_run"],
+      "S": ["idle", "attack", "run", "ride_idle", "ride_run"],
       "NW": ["idle", "run", "attack", "skill", "hurt", "block", "dead", "ride_idle", "ride_run"],
       "SE": ["idle", "run", "attack", "skill", "hurt", "block", "dead", "ride_idle", "ride_run"]
     },
