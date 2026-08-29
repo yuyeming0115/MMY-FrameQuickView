@@ -320,6 +320,7 @@ class PartToggles(QFrame):
 
     toggled = Signal(str, bool)   # (part 名, 是否可见)
     fx_dressed = Signal(str)      # M26：穿戴特效 key（"" = 不穿戴）
+    wing_dressed = Signal(str)    # M28：穿戴翅膀 key（"" = 不穿戴）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -335,25 +336,29 @@ class PartToggles(QFrame):
         title.setStyleSheet("color: #96A1AD; font-size: 11px; letter-spacing: 1px;")
         outer.addWidget(title)
 
-        # M26：穿戴特效——全局特效库，任意套装可挑一个穿上（选完可直接
-        # Ctrl+方向键微调偏移，与显示层操作集中在一处）
-        self._fx_label = QLabel("穿戴特效")
-        self._fx_label.setStyleSheet("color: #96A1AD; font-size: 11px; letter-spacing: 1px;")
-        outer.addWidget(self._fx_label)
+        # M26/M28：穿戴行——全局可穿戴资源库（特效 / 翅膀），任意套装可挑一个穿上。
+        # 选完特效可直接 Ctrl+方向键微调偏移，与显示层操作集中在一处。
+        def add_wear_row(caption: str, handler) -> tuple[QLabel, QComboBox]:
+            label = QLabel(caption)
+            label.setStyleSheet("color: #96A1AD; font-size: 11px; letter-spacing: 1px;")
+            outer.addWidget(label)
+            combo = QComboBox()
+            combo.setFixedHeight(24)
+            combo.setStyleSheet(
+                "QComboBox { background: #2A2E33; border: 1px solid #3A3F46; border-radius: 4px;"
+                " color: #E8E4D9; padding: 2px 6px; font-size: 12px; }"
+                "QComboBox:hover { border-color: #D4AF37; }"
+                "QComboBox QAbstractItemView { background: #2A2E33; color: #E8E4D9;"
+                " selection-background-color: #D4AF37; selection-color: #1E2023; }"
+            )
+            combo.currentIndexChanged.connect(handler)
+            outer.addWidget(combo)
+            label.hide()      # 无对应资源库 / 单部件视图时隐藏
+            combo.hide()
+            return label, combo
 
-        self._fx_combo = QComboBox()
-        self._fx_combo.setFixedHeight(24)
-        self._fx_combo.setStyleSheet(
-            "QComboBox { background: #2A2E33; border: 1px solid #3A3F46; border-radius: 4px;"
-            " color: #E8E4D9; padding: 2px 6px; font-size: 12px; }"
-            "QComboBox:hover { border-color: #D4AF37; }"
-            "QComboBox QAbstractItemView { background: #2A2E33; color: #E8E4D9;"
-            " selection-background-color: #D4AF37; selection-color: #1E2023; }"
-        )
-        self._fx_combo.currentIndexChanged.connect(self._on_fx_changed)
-        outer.addWidget(self._fx_combo)
-        self._fx_label.hide()      # 无特效库 / 单部件视图时隐藏
-        self._fx_combo.hide()
+        self._fx_label, self._fx_combo = add_wear_row("穿戴特效", self._on_fx_changed)
+        self._wing_label, self._wing_combo = add_wear_row("穿戴翅膀", self._on_wing_changed)
 
         # 按钮列表滚动区：高度受限时出现滚动条，按钮不再溢出裁剪
         self._scroll = QScrollArea()
@@ -377,43 +382,61 @@ class PartToggles(QFrame):
         self._items: list[tuple[str, QPushButton]] = []
         self._visible: dict[str, bool] = {}
 
-    def set_fx_library(self, items: list[tuple[str, str]], current: str = "") -> None:
-        """M26：设置「穿戴特效」下拉框。items = [(特效 key, 显示名), ...]。
-
-        - 空列表 → 隐藏下拉框（无特效库 / 单部件视图）
-        - current = 该套装当前已穿戴的特效 key（"" 表示未穿戴）
-        - 重建期间 blockSignals，避免重建过程误发射 fx_dressed
-        """
-        if not items:
-            self._fx_label.hide()
-            self._fx_combo.hide()
-            return
-        self._fx_combo.blockSignals(True)
-        self._fx_combo.clear()
-        self._fx_combo.addItem("无", "")
+    # ---------------- M26/M28：穿戴行（特效 / 翅膀）----------------
+    @staticmethod
+    def _fill_wear_combo(combo: QComboBox, items: list[tuple[str, str]], current: str) -> None:
+        """填充穿戴下拉框（无 + 选项列表）；重建期间 blockSignals 防误发射。"""
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("无", "")
         for key, name in items:
-            self._fx_combo.addItem(name, key)
-        idx = self._fx_combo.findData(current)
-        self._fx_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self._fx_combo.blockSignals(False)
-        self._fx_label.show()
-        self._fx_combo.show()
+            combo.addItem(name, key)
+        idx = combo.findData(current)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.blockSignals(False)
+
+    def _set_wear_library(self, label: QLabel, combo: QComboBox,
+                          items: list[tuple[str, str]], current: str) -> None:
+        """设置某个穿戴下拉框：空列表则隐藏（无资源库 / 单部件视图）。"""
+        if not items:
+            label.hide()
+            combo.hide()
+            return
+        self._fill_wear_combo(combo, items, current)
+        label.show()
+        combo.show()
+
+    def set_fx_library(self, items: list[tuple[str, str]], current: str = "") -> None:
+        """M26：设置「穿戴特效」下拉框。items = [(特效 key, 显示名), ...]。"""
+        self._set_wear_library(self._fx_label, self._fx_combo, items, current)
+
+    def set_wing_library(self, items: list[tuple[str, str]], current: str = "") -> None:
+        """M28：设置「穿戴翅膀」下拉框。items = [(翅膀 key, 显示名), ...]。"""
+        self._set_wear_library(self._wing_label, self._wing_combo, items, current)
 
     def _on_fx_changed(self, index: int) -> None:
-        """下拉框切换 → 发出穿戴信号（重建期间被 blockSignals 屏蔽）。"""
+        """特效下拉框切换 → 发出穿戴信号（重建期间被 blockSignals 屏蔽）。"""
         if index < 0:
             return
         key = self._fx_combo.itemData(index)
         self.fx_dressed.emit(key if key else "")
 
-    @property
-    def fx_selector_visible(self) -> bool:
-        """M26：穿戴特效下拉框是否可见（供 _reposition_toggles 计算面板尺寸）。"""
-        return self._fx_combo.isVisible()
+    def _on_wing_changed(self, index: int) -> None:
+        """翅膀下拉框切换 → 发出穿戴信号（重建期间被 blockSignals 屏蔽）。"""
+        if index < 0:
+            return
+        key = self._wing_combo.itemData(index)
+        self.wing_dressed.emit(key if key else "")
 
-    def fx_selector_hint_width(self) -> int:
-        """M26：穿戴特效下拉框的建议宽度（供 _reposition_toggles 计算面板宽度）。"""
-        return self._fx_combo.sizeHint().width() if self._fx_combo.isVisible() else 0
+    @property
+    def wear_selector_count(self) -> int:
+        """M28：可见的穿戴下拉框数量（供 _reposition_toggles 计算面板高度）。"""
+        return sum(1 for c in (self._fx_combo, self._wing_combo) if c.isVisible())
+
+    def wear_selector_hint_width(self) -> int:
+        """M28：可见穿戴下拉框的最大建议宽度（供 _reposition_toggles 算面板宽度）。"""
+        ws = [c.sizeHint().width() for c in (self._fx_combo, self._wing_combo) if c.isVisible()]
+        return max(ws) if ws else 0
 
     def set_parts(self, parts: dict[str, str], hidden: set[str]) -> None:
         """parts = {part 名: 中文名}；hidden = 当前应隐藏的 part 集合。
@@ -577,6 +600,9 @@ class AnimView(QFrame):
         self._flat_mask: list[bool] = []
         self._fx_part_keys: list[str] = []          # 各层 part_key（仅特效层有值）
         self._fx_offsets: dict[int, tuple[int, int]] = {}
+        # M28：真正的特效层索引。穿戴的翅膀 flat_mask 也是 True（需居中对齐），
+        # 但按 (方向,动作) 取帧、对齐本就准确，不参与 Ctrl+方向键偏移微调。
+        self._fx_layer_indices: set[int] = set()
         self.setFocusPolicy(Qt.StrongFocus)          # 接收键盘事件
         # 微调防抖：连续按键合并为一次刷新（避免每次都重新解码全部帧导致卡顿）
         self._fx_debounce = QTimer(self)
@@ -626,6 +652,14 @@ class AnimView(QFrame):
         """
         self._fx_part_keys = keys
 
+    def set_fx_layer_indices(self, indices: set[int]) -> None:
+        """M28：标记哪些层是「真正的特效层」（扁平结构资源）。
+
+        穿戴的翅膀 flat_mask 也是 True（独立资源需居中对齐），但它按
+        (方向,动作) 取帧、对齐本就准确，不需要微调 → 靠这个集合排除。
+        """
+        self._fx_layer_indices = set(indices)
+
     def keyPressEvent(self, event) -> None:
         """Ctrl+方向键：微调特效层偏移（每次 5px，防抖刷新）。
 
@@ -634,12 +668,14 @@ class AnimView(QFrame):
         """
         if (event.modifiers() & Qt.ControlModifier and
                 event.key() in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down)):
-            # 找到第一个特效层的索引
-            fx_idx = None
-            for i, is_flat in enumerate(self._flat_mask):
-                if is_flat:
-                    fx_idx = i
-                    break
+            # M28：优先定位真正的特效层——穿戴的翅膀 flat_mask 也是 True
+            #（需居中对齐），但它按 (方向,动作) 取帧、对齐本就准确，不参与微调。
+            fx_idx = min(self._fx_layer_indices) if self._fx_layer_indices else None
+            if fx_idx is None:
+                for i, is_flat in enumerate(self._flat_mask):
+                    if is_flat:
+                        fx_idx = i
+                        break
             if fx_idx is None or fx_idx >= len(self._fx_part_keys):
                 super().keyPressEvent(event)
                 return
@@ -683,10 +719,11 @@ class AnimView(QFrame):
             # 不会自动失效（拿到的是过期小尺寸），不能依赖 adjustSize。
             w = max(b.sizeHint().width() for b in btns) + 16 + 10  # 边距 + 滚动条余量
             h = 6 + 18 + 4 + n * 24 + (n - 1) * 4 + 6             # 标题 + 按钮行
-            # M26：穿戴特效下拉框（标签 18 + spacing 4 + 下拉框 24）
-            if tog.fx_selector_visible:
-                h += 18 + 4 + 24
-                w = max(w, tog.fx_selector_hint_width() + 16 + 10)
+            # M26/M28：穿戴下拉框（每组：标签 18 + spacing 4 + 下拉框 24）
+            n_wear = tog.wear_selector_count
+            if n_wear:
+                h += n_wear * (18 + 4 + 24)
+                w = max(w, tog.wear_selector_hint_width() + 16 + 10)
             tog.setFixedSize(w, h)
         # 高度上限：超出宿主则收窄到宿主高度，内部滚动接管
         max_h = host.height() - 8
@@ -714,6 +751,15 @@ class AnimView(QFrame):
     def set_fx_library(self, items: list[tuple[str, str]], current: str = "") -> None:
         """M26：把全局特效库灌进显示层面板的下拉框；空列表则隐藏。"""
         self._toggles.set_fx_library(items, current)
+        self._reposition_toggles()
+
+    def wing_dressed_signal(self):
+        """M28：暴露 wing_dressed 信号供上层连接（穿戴翅膀切换）。"""
+        return self._toggles.wing_dressed
+
+    def set_wing_library(self, items: list[tuple[str, str]], current: str = "") -> None:
+        """M28：把全局翅膀库灌进显示层面板的下拉框；空列表则隐藏。"""
+        self._toggles.set_wing_library(items, current)
         self._reposition_toggles()
 
     def show_sequence(

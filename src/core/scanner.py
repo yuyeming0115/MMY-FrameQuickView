@@ -130,6 +130,10 @@ class ScanResult:
     # 独立文件夹 / 任意深度），统一收集，供任意套装"穿戴"选择。
     # 特效是通用资源，不应要求复制到每个套装目录。
     fx_library: list[PartData] = field(default_factory=list)
+    # 全局翅膀库（M28）：所有 wings 部件，无论物理位置，供任意套装穿戴。
+    # 与特效的差异：翅膀是常规部件（有方向/动作层级），穿戴时按当前 (方向,动作)
+    # 取帧；特效是扁平结构，取自身序列。
+    wing_library: list[PartData] = field(default_factory=list)
 
 
 def _scan_action_folder(action_dir: Path, tpl: Template) -> ActionData:
@@ -406,8 +410,9 @@ def scan_root(root: Path, tpl: Template, char_type_of=None, max_depth: int = 6) 
     if single is not None:
         result = ScanResult(root=root.parent, parts=[single])
         result.groups = _group_parts(result.parts, tpl, char_type_of)
-        # 拖入的本身是特效 → 也进全局库（M26）
+        # 拖入的本身是特效 / 翅膀 → 也进全局库（M26 / M28）
         result.fx_library = [p for p in result.parts if p.is_flat]
+        result.wing_library = [p for p in result.parts if p.part == "wings"]
         return result
 
     # 情况2：父级 / 多级目录 → 递归收集部件单元（散件 / 套装）
@@ -425,9 +430,10 @@ def scan_root(root: Path, tpl: Template, char_type_of=None, max_depth: int = 6) 
             else:
                 result.ignored.append(pf.name)
     result.groups = _group_parts(result.parts, tpl, char_type_of, outfit_by_parent)
-    # 全局特效库（M26）：扫到的所有 flat 特效，无论物理位置。
-    # 套装目录内的特效照常被 M25 自动并入套装组，同时也进库供其他套装穿戴。
+    # 全局可穿戴库（M26 特效 / M28 翅膀）：扫到的所有 flat 特效与 wings 部件，
+    # 无论物理位置。套装目录内的照常被自动并入套装组，同时也进库供其他套装穿戴。
     result.fx_library = [p for p in result.parts if p.is_flat]
+    result.wing_library = [p for p in result.parts if p.part == "wings"]
     return result
 
 
@@ -474,9 +480,16 @@ def _find_part_units(root: Path, tpl: Template, max_depth: int) -> list[tuple[Pa
             # 套装判定：≥2 部件、跨 ≥2 ID、≤阈值（含特效层）、全部同一资源类别（如全主角）。
             # 「同类别」排除混放堆（翅膀+坐骑+主角…不同角色的部件扔一个文件夹），
             # 也排除大库（角色输出图 跨 190+ ID 混多类别）；名字解析失败的部件不参与判定。
+            # M28：单一部位的文件夹不是套装（如「翅膀库」里全是 wings、「影子库」
+            # 里全是 shadow）——它们是通用素材库，应各自按 ID 独立成组，否则会被
+            # 硬拼成一个把所有翅膀叠一起的假套装。真套装必然含 ≥2 种部位
+            #（body/hair/weapon/shadow…）。纯 ID 文件夹（part=None）不参与部位判定。
+            part_types = {p[1] for p in (tpl.parse_folder_name(c.name) for c in leaves)
+                          if p and p[1]}
             if (len(leaves) >= 2 and len(ids) >= 2
                     and len(leaves) + len(flats) <= tpl.outfit_merge_max
-                    and len(cats) == 1 and "" not in cats):
+                    and len(cats) == 1 and "" not in cats
+                    and len(part_types) >= 2):
                 units.append((d, leaves + flats))   # 套装单元 + 特效置顶层
             else:
                 units.append((None, leaves))    # 散件：维持按 ID 分组
