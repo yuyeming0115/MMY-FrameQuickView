@@ -255,13 +255,18 @@ class PartList(QFrame):
                 grp_item.setFlags(flags)
                 self.tree.addTopLevelItem(grp_item)
 
+                # 影子归属：组内同 ID 主件（武器影子/身体影子），套装跨 ID 双影子可区分
+                sibs = [(q.res_id, q.part) for q in grp.parts]
                 for pd in grp.parts:
-                    label = pd.part if pd.part else "（整体资源）"
-                    if self._namemap:
-                        label = f"{label} · {self._namemap.part_cn(pd.part)}"
+                    cn, _ = (self._namemap.part_cn_in(pd.part, pd.res_id, sibs)
+                             if self._namemap else (pd.part or "（整体资源）", None))
                     if grp.is_outfit:
-                        # 套装组跨 ID：子项带所属 ID（区分重名部件，如两个 shadow）
-                        label = f"{label} · {pd.res_id}"
+                        # 套装组跨 ID：子项 = `ID 中文`（如 501031005 武器影子）
+                        label = f"{pd.res_id} {cn}"
+                    else:
+                        label = pd.part if pd.part else "（整体资源）"
+                        if self._namemap:
+                            label = f"{label} · {cn}"
                     if pd.has_issues:
                         label += "  🔴"
                     elif self._fills_check and pd.has_warnings:

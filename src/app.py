@@ -387,10 +387,19 @@ class MainWindow(QMainWindow):
         return base if len(same) == 1 else f"{base}·{p.res_id}"
 
     def _toggle_label(self, p, grp) -> str:
-        cn = self._namemap.part_cn(p.part) if self._namemap else p.part
         base = p.part or p.name
         key = self._toggle_key(p, grp)
-        return f"{cn}·{p.res_id}" if key != base else (cn or base)
+        if self._namemap is None:
+            cn, owner = p.part or "", None
+        else:
+            sibs = [(q.res_id, q.part) for q in grp.parts]
+            cn, owner = self._namemap.part_cn_in(p.part, p.res_id, sibs)
+        if key == base:
+            return cn or base
+        # 组内重名：影子归属主体后已可区分（武器影子/身体影子），其余重名补 `·ID`
+        if owner is not None:
+            return cn
+        return f"{cn or base}·{p.res_id}"
 
     def _on_part_toggled(self, part: str, visible: bool) -> None:
         if visible:

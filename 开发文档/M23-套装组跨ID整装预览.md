@@ -43,9 +43,14 @@ hero\50151100_女主2_红拂女\Render_Output\501521005_女主2_女侠客(双刀
 ### 2. 用户确认的交互决策
 
 - **重名部件（双 shadow）默认全部显示**，与现有组视图一致；
-  显隐 chips 用 `影子·501031005` / `影子·501521005`（部件·ID）区分，可独立开关
+  显隐 chips 用**归属名**区分：`武器影子` / `身体影子`（影子归属同 ID 主件，见下）
 - **组头显示 = 文件夹名去掉 `_部件` 后缀**（如 `501521005_女主2_女侠客(双刀)`、`天命女(琴)`），
   带「套装」标记；ID 组头维持 `ID · 中文名` 风格
+- **影子归属文案**（测试反馈优化）：影子部件的中文名 = 同 ID 主件中文名 + `影子`
+  （`501031005_shadow` → 武器影子，`501521005_shadow` → 身体影子）；
+  同 ID 无主件时兜底纯 `影子`；归属优先级 body > weapon > 其余
+- **套装组子项显示 = `ID 中文`**（如 `501031005 武器影子`，ID 在前）；
+  非 shadow 重名部件的显隐 chips 仍用 `中文·ID`
 
 ### 3. 数据模型（IdGroup 扩展）
 
@@ -75,6 +80,7 @@ hero\50151100_女主2_红拂女\Render_Output\501521005_女主2_女侠客(双刀
 |------|------|
 | `src/core/scanner.py` | `_find_part_folders` → `_find_part_units`（返回 父文件夹+部件列表 单元）；`_build_outfit_group`；`_group_parts` 尾段抽公共 `_finalize_group`；IdGroup 加 key/is_outfit/display_name；max_depth 6 |
 | `src/core/template.py` | `outfit_merge_max: int = 16` 字段 + JSON 读写 |
+| `src/core/namemap.py` | 新增 `shadow_owner` / `part_cn_in`：影子归属同 ID 主件 → 武器影子/身体影子（body > weapon 优先） |
 | `src/app.py` | 组选择按 key 查找；重名部件 toggle key（`part·res_id`）；状态栏组名用 display_name |
 | `src/ui/part_list.py` | 套装组头显示（去 _部件 后缀 + 套装标记 + 不可 F2 改名）；子项带所属 ID；红点刷新按 key；右键菜单适配 |
 | `tests/test_m23_outfit_group.py` | 新增：套装合并 / 阈值降级 / 同 ID 不合并 / 混类别不合并 / 显示名 / 叠层层序 |
