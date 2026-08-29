@@ -42,7 +42,7 @@ LIST_COL_PADDING = 40           # 容器宽 - 折叠按钮 28 - 内边距 12
 
 class PartList(QFrame):
     part_selected = Signal(object)  # PartData
-    group_selected = Signal(str)    # res_id（点击组头时触发，用于同ID叠层显示）
+    group_selected = Signal(str)    # 组 key（点击组头时触发：ID 组=res_id，套装组=父文件夹路径）
     pick_namemap = Signal()         # 点击「📖 选择匹配表」按钮时触发，app 打开文件选择
 
     def __init__(self, parent=None):
@@ -171,7 +171,7 @@ class PartList(QFrame):
         """遍历现有树条目，仅更新 🔴/🟠 标记（不重建、不触发选择变化）。"""
         if self._result is None:
             return
-        grp_by_id = {g.res_id: g for g in self._result.groups}
+        grp_by_id = {g.key: g for g in self._result.groups}
         self._loading = True   # 防 setText 触发 itemChanged 走改名回写逻辑
         try:
             for i in range(self.tree.topLevelItemCount()):
@@ -231,27 +231,37 @@ class PartList(QFrame):
             self._parts.clear()
 
             for grp in self._result.groups:
-                header = grp.res_id
-                if self._namemap:
-                    # 用组内任意部件的文件夹名做精确查找
-                    first = grp.parts[0]
-                    header = self._namemap.display(first.name, grp.res_id)
+                if grp.is_outfit:
+                    # 套装组（M23）：显示父文件夹名（去 _部件 后缀）+ 套装标记，不查匹配表
+                    header = f"{grp.display_name}（套装·{len(grp.parts)}件）"
+                else:
+                    header = grp.res_id
+                    if self._namemap:
+                        # 用组内任意部件的文件夹名做精确查找
+                        first = grp.parts[0]
+                        header = self._namemap.display(first.name, grp.res_id)
                 if grp.has_issues:
                     header += "  🔴"
                 elif self._fills_check and grp.has_warnings:
                     header += "  🟠"
                 grp_item = QTreeWidgetItem([header])
                 grp_item.setForeground(0, QBrush(SUB))
-                grp_item.setData(0, Qt.UserRole, "GRP:" + grp.res_id)
+                grp_item.setData(0, Qt.UserRole, "GRP:" + grp.key)
                 grp_item.setData(0, Qt.UserRole + 1, grp.category)
-                # 组头可选中（叠层显示）且可编辑（改名）
-                grp_item.setFlags(grp_item.flags() | Qt.ItemIsEditable | Qt.ItemIsSelectable)
+                # 组头可选中（叠层显示）；ID 组可编辑（F2 改名写匹配表），套装组不可
+                flags = grp_item.flags() | Qt.ItemIsSelectable
+                if not grp.is_outfit:
+                    flags |= Qt.ItemIsEditable
+                grp_item.setFlags(flags)
                 self.tree.addTopLevelItem(grp_item)
 
                 for pd in grp.parts:
                     label = pd.part if pd.part else "（整体资源）"
                     if self._namemap:
                         label = f"{label} · {self._namemap.part_cn(pd.part)}"
+                    if grp.is_outfit:
+                        # 套装组跨 ID：子项带所属 ID（区分重名部件，如两个 shadow）
+                        label = f"{label} · {pd.res_id}"
                     if pd.has_issues:
                         label += "  🔴"
                     elif self._fills_check and pd.has_warnings:
@@ -394,18 +404,17 @@ class PartList(QFrame):
         """组头内联改名：`502019 · 杜如晦` → 取 · 后的部分写回匹配表。"""
         if self._loading or self._namemap is None or self._result is None:
             return
-        # 只处理组头（UserRole 为 None 且有 res_id）
-        res_id = None
-        for grp in self._result.groups:
-            if grp.res_id in item.text(0).split(" · ")[0]:
-                res_id = grp.res_id
-                break
-        if res_id is None:
+        key = item.data(0, Qt.UserRole) or ""
+        if not key.startswith("GRP:"):
+            return
+        grp = next((g for g in self._result.groups if g.key == key[4:]), None)
+        # 套装组不可改名（display_name 来自文件夹名，改文件夹名不在功能范围）
+        if grp is None or grp.is_outfit:
             return
         text = item.text(0).replace("  🔴", "")
         new_name = text.split(" · ", 1)[1].strip() if " · " in text else ""
         if new_name:
-            self._namemap.set_name(res_id, new_name)
+            self._namemap.set_name(grp.res_id, new_name)
         self.refresh_names()
 
     # ---------------- 右键菜单 ----------------
@@ -420,15 +429,20 @@ class PartList(QFrame):
         res_id: str | None = None
         name: str | None = None
         folder_path: str | None = None
+        outfit = None
 
         if key.startswith("GRP:"):
-            # 组头：res_id 来自 key，中文名查匹配表
-            res_id = key[4:]
-            if self._namemap and self._result:
-                for grp in self._result.groups:
-                    if grp.res_id == res_id and grp.parts:
-                        name = self._namemap.lookup(grp.parts[0].name, grp.res_id)
-                        break
+            # 组头：按 key 查组；res_id / 中文名按组类型取
+            grp = next((g for g in self._result.groups if g.key == key[4:]), None) if self._result else None
+            if grp is None:
+                return
+            res_id = grp.res_id
+            if grp.is_outfit:
+                # 套装组：可复制父文件夹路径与全部部件 ID
+                folder_path = grp.key
+                outfit = grp
+            elif self._namemap and grp.parts:
+                name = self._namemap.lookup(grp.parts[0].name, grp.res_id)
         else:
             # 子项：key = 文件夹路径
             pd = self._parts.get(key)
@@ -445,10 +459,16 @@ class PartList(QFrame):
             "QMenu::item { color: #E8E4D9; padding: 6px 18px; border-radius: 3px; }"
             "QMenu::item:selected { background: #3A3F46; color: #D4AF37; }"
         )
-        menu.addAction(f"复制 ID（{res_id}）", lambda: self._copy_text(res_id or ""))
-        if name:
-            full = f"{res_id} · {name}"
-            menu.addAction(f"复制 ID · 中文名（{full}）", lambda: self._copy_text(full))
+        if outfit is not None:
+            all_ids = ", ".join(dict.fromkeys(p.res_id for p in outfit.parts))
+            menu.addAction(f"复制全部 ID（{all_ids}）", lambda: self._copy_text(all_ids))
+            if res_id:
+                menu.addAction(f"复制主 ID（{res_id}）", lambda: self._copy_text(res_id))
+        else:
+            menu.addAction(f"复制 ID（{res_id}）", lambda: self._copy_text(res_id or ""))
+            if name:
+                full = f"{res_id} · {name}"
+                menu.addAction(f"复制 ID · 中文名（{full}）", lambda: self._copy_text(full))
         if folder_path:
             menu.addSeparator()
             menu.addAction("复制文件夹路径", lambda: self._copy_text(folder_path))

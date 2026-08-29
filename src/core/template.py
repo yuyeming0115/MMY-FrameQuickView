@@ -30,6 +30,8 @@ class Template:
     # 每条：{"name": 分类名, "part_any": [部件名...], "id_prefix": [ID前缀...],
     #        "flat": bool, "frame_pattern": stem正则, "virtual_direction": 虚拟方向名}
     categories: list[dict] = field(default_factory=list)
+    # 套装组合并阈值：同父文件夹下跨 ID 部件数 ≤ 该值才合并为套装组（防大库误合并）。
+    outfit_merge_max: int = 16
 
     # 角色类型归一化：匹配表第3列 → action_rules 的 key。
     # 主角类 → protagonist；伙伴/怪物/boss → non_protagonist；
@@ -155,6 +157,7 @@ class Template:
             "action_rules": self.action_rules,
             "default_character_type": self.default_character_type,
             "categories": self.categories,
+            "outfit_merge_max": self.outfit_merge_max,
         }
 
     @classmethod
@@ -172,6 +175,7 @@ class Template:
             action_rules=dict(data.get("action_rules", {})),
             default_character_type=data.get("default_character_type", "non_protagonist"),
             categories=list(data.get("categories", [])),
+            outfit_merge_max=int(data.get("outfit_merge_max", 16)),
         )
 
 

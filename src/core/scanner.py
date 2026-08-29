@@ -77,9 +77,17 @@ class PartData:
 
 @dataclass
 class IdGroup:
-    """同 ID 的分组（叠层配套校验的基本单位）。"""
+    """部件分组（叠层配套校验的基本单位）。
+
+    - ID 组：同 res_id 部件；key = res_id；组头显示由 part_list 查匹配表拼接
+    - 套装组（M23）：同一父文件夹下跨 ID 部件；key = 父文件夹完整路径；
+      display_name = 文件夹名去 `_部件` 后缀；res_id = body 部件的 ID
+    """
     res_id: str
     parts: list[PartData] = field(default_factory=list)
+    key: str = ""                             # 组唯一键（左栏选择/红点刷新/组查找用）
+    is_outfit: bool = False                   # 是否套装组
+    display_name: str = ""                    # 套装组头显示名（ID 组为空）
     # 配套异常：某部位缺失而组内其他部件拥有的 (direction, action)
     pairing_issues: list[str] = field(default_factory=list)
     # 按角色类型+方向基准的缺漏（组视图按钮矩阵/状态栏用）
@@ -377,12 +385,13 @@ def _transpose(matrix: dict[str, dict[str, ActionData]]) -> dict[str, dict[str, 
     return out
 
 
-def scan_root(root: Path, tpl: Template, char_type_of=None, max_depth: int = 4) -> ScanResult:
+def scan_root(root: Path, tpl: Template, char_type_of=None, max_depth: int = 6) -> ScanResult:
     """扫描入口：支持多级目录，递归找到任意深度的部件文件夹。
 
     - 拖入部件文件夹：单部件（root 记为父目录）。
     - 拖入角色文件夹（如 拓跋影(双刀)）：递归一层找到其下部件。
     - 拖入根目录（如 新ID）：递归找到 角色/部件 全部。
+    - 拖入套装父文件夹（如 …_部件 / 新ID\天命女(琴)）：跨 ID 部件合并为一个套装组（M23）。
 
     关键：scan_part 一律用「真实完整路径」调用，绝不用 root/部件名 重新拼接，
     避免把 角色/部件 错拼成 根/部件（导致后台解码时文件不存在）。
@@ -395,30 +404,35 @@ def scan_root(root: Path, tpl: Template, char_type_of=None, max_depth: int = 4) 
         result.groups = _group_parts(result.parts, tpl, char_type_of)
         return result
 
-    # 情况2：父级 / 多级目录 → 递归收集所有部件文件夹
+    # 情况2：父级 / 多级目录 → 递归收集部件单元（散件 / 套装）
     result = ScanResult(root=root)
     if not root.is_dir():
         return result
-    for pf in _find_part_folders(root, tpl, max_depth):
-        pd = scan_part(pf, tpl, char_type_of)
-        if pd is not None:
-            result.parts.append(pd)
-        else:
-            result.ignored.append(pf.name)
-    result.groups = _group_parts(result.parts, tpl, char_type_of)
+    outfit_by_parent: dict[Path, list[PartData]] = {}
+    for parent, folders in _find_part_units(root, tpl, max_depth):
+        for pf in folders:
+            pd = scan_part(pf, tpl, char_type_of)
+            if pd is not None:
+                result.parts.append(pd)
+                if parent is not None:
+                    outfit_by_parent.setdefault(parent, []).append(pd)
+            else:
+                result.ignored.append(pf.name)
+    result.groups = _group_parts(result.parts, tpl, char_type_of, outfit_by_parent)
     return result
 
 
-def _find_part_folders(root: Path, tpl: Template, max_depth: int) -> list[Path]:
-    """BFS 收集 root 下所有「叶子部件文件夹」（内层直接是 direction）。
+def _find_part_units(root: Path, tpl: Template, max_depth: int) -> list[tuple[Path | None, list[Path]]]:
+    """BFS 收集部件单元：返回 (套装父文件夹 | None, 部件文件夹列表)。
 
     - 叶子部件文件夹：收集，且**不再下钻**（其下是 方向/动作，不是部件）。
-    - 非叶子目录（角色名/分类文件夹/ID壳）：子目录是部件文件夹而非 direction，
-      继续向下递归，直到 max_depth。名字是否命中不作为叶子判据——如 怪物/503006/
-      名字是纯ID但内层是 503006_body 壳，不是部件文件夹，必须继续下钻。
-    - 用真实完整路径返回，调用方直接 scan_part(该路径) 即得正确帧路径。
+    - 非叶子目录（角色名/分类文件夹/ID壳）：继续向下递归，直到 max_depth。
+    - 套装判定（M23）：某文件夹直接子项里的叶子部件 ≥2 个、跨 ≥2 个资源 ID、
+      总数 ≤ tpl.outfit_merge_max → 这些部件归属一个套装单元（parent = 该文件夹）；
+      超阈值（如 角色输出图 221 件）→ 降级为散件（parent=None，按 ID 分组）。
+      特效扁平文件夹一律按散件处理，不参与套装合并。
     """
-    found: list[Path] = []
+    units: list[tuple[Path | None, list[Path]]] = []
     stack: list[tuple[Path, int]] = [(root, 0)]
     while stack:
         d, depth = stack.pop()
@@ -428,22 +442,43 @@ def _find_part_folders(root: Path, tpl: Template, max_depth: int) -> list[Path]:
             children = sorted(d.iterdir(), key=lambda p: p.name)
         except (PermissionError, OSError):
             continue
+        leaves: list[Path] = []
         for c in children:
             if not c.is_dir():
                 continue
             if _is_leaf_part_folder(c, tpl):
-                found.append(c)                 # 叶子部件文件夹：收集，不继续下钻
+                leaves.append(c)                # 叶子部件文件夹：收集，不继续下钻
             elif _is_flat_folder(c, tpl):
-                found.append(c)                 # 扁平结构资源（特效类）：文件直接在根目录
+                units.append((None, [c]))       # 扁平结构资源（特效类）：按散件
             else:
                 stack.append((c, depth + 1))    # 角色/分类/ID壳文件夹：继续递归
-    return found
+        if leaves:
+            ids = set()
+            cats = set()
+            for c in leaves:
+                parsed = tpl.parse_folder_name(c.name)
+                if parsed:
+                    ids.add(parsed[0])
+                    cats.add(tpl.classify(parsed[0], [parsed[1]]))
+            # 套装判定：≥2 部件、跨 ≥2 ID、≤阈值、全部同一资源类别（如全主角）。
+            # 「同类别」排除混放堆（翅膀+坐骑+主角…不同角色的部件扔一个文件夹），
+            # 也排除大库（角色输出图 跨 190+ ID 混多类别）；名字解析失败的部件不参与判定。
+            if (len(leaves) >= 2 and len(ids) >= 2 and len(leaves) <= tpl.outfit_merge_max
+                    and len(cats) == 1 and "" not in cats):
+                units.append((d, leaves))       # 套装单元：同父跨 ID 部件
+            else:
+                units.append((None, leaves))    # 散件：维持按 ID 分组
+    return units
 
 
-def _group_parts(parts: list[PartData], tpl: Template, char_type_of=None) -> list[IdGroup]:
-    """按 res_id 分组，并计算组级缺漏 + 同 ID 配套校验（交集对比）。"""
+def _group_parts(parts: list[PartData], tpl: Template, char_type_of=None,
+                 outfit_by_parent: dict[Path, list[PartData]] | None = None) -> list[IdGroup]:
+    """分组：套装单元优先（M23），其余按 res_id 分组；并计算组级缺漏 + 配套校验。"""
+    outfit_members = {id(pd) for members in (outfit_by_parent or {}).values() for pd in members}
     by_id: dict[str, list[PartData]] = {}
     for p in parts:
+        if id(p) in outfit_members:
+            continue    # 套装组部件不重复进 ID 组
         by_id.setdefault(p.res_id, []).append(p)
 
     groups: list[IdGroup] = []
@@ -458,78 +493,113 @@ def _group_parts(parts: list[PartData], tpl: Template, char_type_of=None) -> lis
             # 匹配表未标注类型 → 按模板分类规则推断（与 scan_part 一致）
             char_type = tpl.infer_char_type(res_id, member_parts) or tpl.default_character_type
         grp = IdGroup(res_id=res_id, parts=members, character_type=char_type)
+        grp.key = res_id
         # 资源分类标注（左栏 chips 过滤用）：部件特征优先于 ID 前缀
         grp.category = tpl.classify(res_id, member_parts)
-        # 扁平资源组（特效类）：无方向/动作约定，跳过全部查漏，仅保留帧号断档检测
-        grp.is_flat = bool(members) and all(p.is_flat for p in members)
-        if grp.is_flat:
-            grp.effective_type = "flat"
-            groups.append(grp)
-            continue
-        # 组级方向/动作缺漏：以「组内所有部件并集拥有」为参照，对照类型×方向基准
-        # 部位类型覆盖：组内所有部件都是 wings → wings 规则；都是 ride_* → mount 规则
-        owned_dirs: set[str] = set()
-        owned_per_dir: dict[str, set[str]] = {}
-        for p in members:
-            for d, col in p.matrix.items():
-                owned_dirs.add(d)
-                owned_per_dir.setdefault(d, set()).update(col.keys())
-        grp.missing_directions = [d for d in tpl.directions if d not in owned_dirs]
-        # 判定组级查漏类型：排除 shadow/fills（配套部件，不参与类型判定）
-        # 非 shadow/fills 部件全 wings → wings；全 ride_* → mount；
-        # 否则用 char_type，但若 char_type=default 且组内无任何战斗/坐骑动作 → NPC 兜底。
-        type_parts = [p.part for p in members if p.part not in ("shadow", "fills", None)]
-        if type_parts and all(pt == "wings" for pt in type_parts):
-            group_type = "wings"
-        elif type_parts and all(pt in ("ride_front", "ride_back") for pt in type_parts):
-            group_type = "mount"
-        else:
-            group_type = char_type
-            if char_type == tpl.default_character_type:
-                owned_all: set[str] = set()
-                for acts in owned_per_dir.values():
-                    owned_all |= acts
-                combat = {"attack", "skill", "hurt", "block", "dead"}
-                ride = {"ride_idle", "ride_run"}
-                if not (owned_all & combat) and not (owned_all & ride):
-                    group_type = "npc"
-        grp.effective_type = group_type
-        grp.missing_actions = {}
-        for d in tpl.directions:
-            if d in grp.missing_directions:
-                continue
-            expected = tpl.expected_actions(group_type, d)
-            miss = [a for a in expected if a not in owned_per_dir.get(d, set())]
-            if miss:
-                grp.missing_actions[d] = miss
-        # 组级多余动作：组内各部件 extra_actions 的并集
-        grp.extra_actions = {}
-        extra_per_dir: dict[str, set[str]] = {}
-        for p in members:
-            for d, acts in p.extra_actions.items():
-                extra_per_dir.setdefault(d, set()).update(acts)
-        for d, acts in extra_per_dir.items():
-            grp.extra_actions[d] = sorted(acts)
-        # 组级 fills 警告：组内存在主体部件，但整组无 fills → 缺 fills（警告级）
-        non_fill_parts = [p for p in members if p.part != "fills"]
-        fills_parts = [p for p in members if p.part == "fills"]
-        if non_fill_parts and not fills_parts:
-            nf_dirs: set[str] = set()
-            for p in non_fill_parts:
-                nf_dirs |= set(p.available_directions())
-            grp.missing_fills = sorted(nf_dirs)
-        # 有 fills 部件时，合并其自身警告级缺失到组级
-        for p in fills_parts:
-            grp.fills_warning_directions = sorted(set(grp.fills_warning_directions) | set(p.warning_directions))
-            for d, acts in p.warning_actions.items():
-                cur = set(grp.fills_warning_actions.get(d, []))
-                cur.update(acts)
-                grp.fills_warning_actions[d] = sorted(cur)
-        if len(members) > 1:
-            grp.pairing_issues = _check_pairing(members)
+        _finalize_group(grp, tpl)
         groups.append(grp)
-    groups.sort(key=lambda g: g.res_id)
+
+    for parent, members in (outfit_by_parent or {}).items():
+        groups.append(_build_outfit_group(parent, members, tpl))
+
+    groups.sort(key=lambda g: g.display_name or g.key)
     return groups
+
+
+def _build_outfit_group(parent: Path, members: list[PartData], tpl: Template) -> IdGroup:
+    """套装组（M23）：同一父文件夹下的跨 ID 部件。
+
+    - res_id / character_type 取 body 部件（缺 body 取首个非 shadow/fills 部件）
+    - key = 父文件夹完整路径（保证唯一）；display_name = 文件夹名去 `_部件` 后缀
+    - 查漏 / 配套校验 / fills 警告与 ID 组共用 _finalize_group（并集规则）
+    """
+    members.sort(key=lambda p: tpl.layer_rank(p.part))
+    primary = (next((p for p in members if p.part == "body"), None)
+               or next((p for p in members if p.part not in ("shadow", "fills", None)), None)
+               or (members[0] if members else None))
+    grp = IdGroup(
+        res_id=primary.res_id if primary else "",
+        parts=members,
+        character_type=primary.character_type if primary else tpl.default_character_type,
+    )
+    grp.key = str(parent)
+    grp.is_outfit = True
+    name = parent.name
+    grp.display_name = name[:-len("_部件")] if name.endswith("_部件") else name
+    grp.category = tpl.classify(grp.res_id, [p.part for p in members])
+    _finalize_group(grp, tpl)
+    return grp
+
+
+def _finalize_group(grp: IdGroup, tpl: Template) -> None:
+    """组级查漏 / 配套校验 / fills 警告（ID 组与套装组共用，并集规则）。"""
+    members = grp.parts
+    # 扁平资源组（特效类）：无方向/动作约定，跳过全部查漏，仅保留帧号断档检测
+    grp.is_flat = bool(members) and all(p.is_flat for p in members)
+    if grp.is_flat:
+        grp.effective_type = "flat"
+        return
+    # 组级方向/动作缺漏：以「组内所有部件并集拥有」为参照，对照类型×方向基准
+    # 部位类型覆盖：组内所有部件都是 wings → wings 规则；都是 ride_* → mount 规则
+    owned_dirs: set[str] = set()
+    owned_per_dir: dict[str, set[str]] = {}
+    for p in members:
+        for d, col in p.matrix.items():
+            owned_dirs.add(d)
+            owned_per_dir.setdefault(d, set()).update(col.keys())
+    grp.missing_directions = [d for d in tpl.directions if d not in owned_dirs]
+    # 判定组级查漏类型：排除 shadow/fills（配套部件，不参与类型判定）
+    # 非 shadow/fills 部件全 wings → wings；全 ride_* → mount；
+    # 否则用 char_type，但若 char_type=default 且组内无任何战斗/坐骑动作 → NPC 兜底。
+    type_parts = [p.part for p in members if p.part not in ("shadow", "fills", None)]
+    if type_parts and all(pt == "wings" for pt in type_parts):
+        group_type = "wings"
+    elif type_parts and all(pt in ("ride_front", "ride_back") for pt in type_parts):
+        group_type = "mount"
+    else:
+        group_type = grp.character_type
+        if grp.character_type == tpl.default_character_type:
+            owned_all: set[str] = set()
+            for acts in owned_per_dir.values():
+                owned_all |= acts
+            combat = {"attack", "skill", "hurt", "block", "dead"}
+            ride = {"ride_idle", "ride_run"}
+            if not (owned_all & combat) and not (owned_all & ride):
+                group_type = "npc"
+    grp.effective_type = group_type
+    grp.missing_actions = {}
+    for d in tpl.directions:
+        if d in grp.missing_directions:
+            continue
+        expected = tpl.expected_actions(group_type, d)
+        miss = [a for a in expected if a not in owned_per_dir.get(d, set())]
+        if miss:
+            grp.missing_actions[d] = miss
+    # 组级多余动作：组内各部件 extra_actions 的并集
+    grp.extra_actions = {}
+    extra_per_dir: dict[str, set[str]] = {}
+    for p in members:
+        for d, acts in p.extra_actions.items():
+            extra_per_dir.setdefault(d, set()).update(acts)
+    for d, acts in extra_per_dir.items():
+        grp.extra_actions[d] = sorted(acts)
+    # 组级 fills 警告：组内存在主体部件，但整组无 fills → 缺 fills（警告级）
+    non_fill_parts = [p for p in members if p.part != "fills"]
+    fills_parts = [p for p in members if p.part == "fills"]
+    if non_fill_parts and not fills_parts:
+        nf_dirs: set[str] = set()
+        for p in non_fill_parts:
+            nf_dirs |= set(p.available_directions())
+        grp.missing_fills = sorted(nf_dirs)
+    # 有 fills 部件时，合并其自身警告级缺失到组级
+    for p in fills_parts:
+        grp.fills_warning_directions = sorted(set(grp.fills_warning_directions) | set(p.warning_directions))
+        for d, acts in p.warning_actions.items():
+            cur = set(grp.fills_warning_actions.get(d, []))
+            cur.update(acts)
+            grp.fills_warning_actions[d] = sorted(cur)
+    if len(members) > 1:
+        grp.pairing_issues = _check_pairing(members)
 
 
 def _check_pairing(members: list[PartData]) -> list[str]:

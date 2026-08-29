@@ -68,6 +68,17 @@ E:\Temp\天命装\50152101_body
 > 例：`50105101/changrao_1.png ~ changrao_20.png` → 虚拟方向「特效」+ 动作 changrao。
 > 只做帧号断档检测，不做方向/动作查漏。
 
+> ⚠️ 套装父级结构（M23）：一套职业装 = 多个**不同资源 ID** 的部件放同一父文件夹：
+> ```
+> hero\角色\Render_Output\501521005_女主2_女侠客(双刀)_部件\
+>     501031005_shadow / 501031005_weapon / 501511005_hair / 501521005_body ...
+> 新ID\月河郡主（琴）\
+>     501031004_shadow / 501420004_hair / 501421004_body ...
+> ```
+> 套装判定（纯结构，不看命名）：同父直接子部件 ≥2 个、跨 ≥2 ID、总数 ≤ `outfit_merge_max`（默认16）、
+> 全部同一资源类别 → 合并为一个「套装组」整装叠层预览；否则安全降级为按 ID 分组。
+> 组头 = 文件夹名去 `_部件` 后缀 + 「套装」标记，不可 F2 改名；res_id/角色类型取 body 部件。
+
 ### 默认模板（templates/default.json）
 
 | 类别 | 名称 |
@@ -82,13 +93,14 @@ E:\Temp\天命装\50152101_body
 ### 规则模板系统
 
 - 模板为 JSON 文件，存于 `templates/` 目录，程序启动时自动扫描
-- 字段：`name`、`folder_pattern`（`{id}(_{part})?`，部位后缀可选）、`parts`、`directions`、`actions`、`hierarchy`、`layer_order`、`frame_pattern`、`extensions`
+- 字段：`name`、`folder_pattern`（`{id}(_{part})?`，部位后缀可选）、`parts`、`directions`、`actions`、`hierarchy`、`layer_order`、`frame_pattern`、`extensions`、`outfit_merge_max`（套装合并阈值，默认 16）
 - 顶栏可切换模板 + 进入编辑；针对不同项目各存一份模板
 
 ### 部件选择（拖入父级文件夹时）
 
 - **不用下拉、不铺按钮**：左侧栏为**可搜索部件列表**（顶部过滤框 + 上下键导航 + 回车打开）
 - 列表按 ID 分组：组头 = `资源ID · 中文名`（匹配表映射），组内 = 各部位项；有缺漏的项带红点标记
+- 套装组（M23）：组头 = 父文件夹名（去 `_部件` 后缀）+ 「套装·N件」标记，组内子项带所属 ID；重名部件（如双 shadow）toggle chips 显示为 `部位中文名·ID`
 - 纯 ID 与 `{id}_{part}` 混排，部位后缀高亮显示
 
 ### 中文名映射（v0.3 确认，M1 已实现）
@@ -112,7 +124,7 @@ MMY-FrameQuickView/
 │   ├── main.py                # 入口
 │   ├── app.py                 # 主窗口
 │   ├── core/
-│   │   ├── scanner.py         # 文件夹扫描 + 模板匹配 + 缺漏检测 + 同ID分组
+│   │   ├── scanner.py         # 文件夹扫描 + 模板匹配 + 缺漏检测 + 同ID分组/套装组检测
 │   │   ├── namemap.py         # ID-中文名映射（自动发现/登记/内联改名回写/热更新）
 │   │   ├── template.py        # 规则模板加载/保存/编辑
 │   │   ├── layer.py           # 同ID叠层合成（layer_order 排序、共享bbox对齐）
