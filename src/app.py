@@ -234,13 +234,18 @@ class MainWindow(QMainWindow):
         self.drop.set_current(str(folder))
         self._setup_namemap(folder)
         self.part_list.set_namemap(self._namemap)
+        # 先清空上一轮选择状态，再重建列表：load_result 会自动选中第一项并同步
+        # 触发 part_selected 信号设置 _part；若在其后清空 _part/_group，会把刚
+        # 建立的选中状态抹掉——表现为「界面显示 idle 但点方向/动作按钮无反应，
+        # 需重新点选左栏子项才恢复」（2026-09-01 修复）。
+        self._group = None
+        self._part = None
         self.part_list.load_result(self._result)
-        # 恢复上次选中的资源项（优先用 QSettings 记忆，否则默认第一项）
+        # 恢复上次选中的资源项（优先用 QSettings 记忆；若与自动选中的第一项相同，
+        # setCurrentItem 不触发信号，但 _part 已由 load_result 的自动选中设置好）
         saved_sel = self._settings.value("last/selection", "")
         if saved_sel:
             self.part_list._select_by_key(saved_sel)
-        self._group = None
-        self._part = None
         self._hidden_parts = set(self._settings.value("layering/hidden_parts", [], type=list))
         if not self._result.parts:
             self.statusBar().showMessage(
