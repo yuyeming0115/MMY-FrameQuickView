@@ -28,12 +28,23 @@ DEFAULT_ACTION = "idle"
 DEFAULT_ACTION_BY_TYPE = {"mount": "ride_idle"}
 
 
-def pick_default_action(eff_type: str | None, avail: list[str]) -> str | None:
-    """从可用动作里挑默认动作：按类型优先，该动作缺失则回退字母序第一个。"""
-    if not avail:
+def pick_default_action(eff_type: str | None, avail: list[str],
+                        all_avail: list[str] | None = None) -> str | None:
+    """从可用动作里挑默认动作：按类型优先，该动作缺失则回退字母序第一个。
+
+    - avail：约定动作 ∩ 实际拥有（正常 fallback 来源）
+    - all_avail：部件实际拥有的**全部**动作。当 avail 为空（约定动作一个都不中，
+      例如坐骑影子只有 ride_idle/ride_run，却被当作非坐骑类型查漏），回退到
+      实际动作，仍能正确落到 ride_idle，而不是变成 None（B 区不播放）。
+    """
+    if avail:
+        candidates = avail
+    elif all_avail:
+        candidates = all_avail
+    else:
         return None
     preferred = DEFAULT_ACTION_BY_TYPE.get(eff_type or "", DEFAULT_ACTION)
-    return preferred if preferred in avail else avail[0]
+    return preferred if preferred in candidates else candidates[0]
 
 BTN_STYLE = """
 QPushButton {
@@ -206,7 +217,8 @@ class ButtonMatrix(QFrame):
             miss_acts = expected - present          # 约定要有却没有 → 红
             unexpected = set(tpl.actions) - expected  # 本类型不需要 → 灰
             if action is None or action in miss_acts:
-                action = pick_default_action(eff_type, sorted(expected & present))
+                action = pick_default_action(
+                    eff_type, sorted(expected & present), sorted(present))
         else:
             unexpected = set(tpl.actions)
         self.act_stack.rebuild(tpl.actions, miss_acts, action, unexpected)
@@ -261,7 +273,8 @@ class ButtonMatrix(QFrame):
             miss_acts = set(group.missing_actions.get(direction, [])) or (expected - owned_a_dir)
             unexpected = set(tpl.actions) - expected
             if action is None or action in miss_acts:
-                action = pick_default_action(eff_type, sorted(expected & owned_a_dir))
+                action = pick_default_action(
+                    eff_type, sorted(expected & owned_a_dir), sorted(owned_a_dir))
             self.act_stack.rebuild(tpl.actions, miss_acts, action, unexpected)
         else:
             self.act_stack.rebuild(tpl.actions, set(), None, set(tpl.actions))

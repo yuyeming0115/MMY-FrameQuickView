@@ -135,6 +135,17 @@ try:
     assert a8 == "idle", f"组视图默认动作应为 idle，实际 {a8}"
     print(f"[8] OK 组视图: 方向={d8} 动作={a8}")
 
+    # ---- 9) 坐骑影子：只有 ride_idle/ride_run，却被当作非坐骑类型查漏
+    #        → 约定动作(idle/run/attack…)一个都不中。修复前默认动作= None
+    #        （B 区不播放）；修复后应回退到实际动作 ride_idle。 ----
+    mount_shadow = tmp / "mount_shadow"
+    make_act(mount_shadow, "50302301_shadow", "SE", "ride_idle")
+    make_act(mount_shadow, "50302301_shadow", "SE", "ride_run")
+    ps = scan_root(mount_shadow, tpl).parts[0]
+    d9, a9 = default_action_of(ps)
+    assert a9 == "ride_idle", f"坐骑影子默认动作应为 ride_idle，实际 {a9}（修复前为 None）"
+    print(f"[9] OK 坐骑影子回退: 方向={d9} 动作={a9}（eff_type={ps.effective_type or '空'}）")
+
     print("ALL M27 PASS")
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
