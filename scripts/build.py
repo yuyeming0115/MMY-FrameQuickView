@@ -31,7 +31,8 @@ def main() -> int:
     parser.add_argument("mode", nargs="?", default="onefile", choices=["onefile", "onedir"])
     args = parser.parse_args()
 
-    timestamp = datetime.now().strftime("%Y%m%d")
+    # 加时分秒：同一天多次打包不再互相覆盖（旧产物可留存对比）
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     release_dir = PROJECT_ROOT / "releases" / f"v{VERSION}_{timestamp}"
     release_dir.mkdir(parents=True, exist_ok=True)
 
