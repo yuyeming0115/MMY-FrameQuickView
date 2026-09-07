@@ -92,6 +92,9 @@ class MainWindow(QMainWindow):
         self._fx_layer_indices: set[int] = set()
         # fills 警告检测开关：NPC/翅膀/主角/坐骑等无 fills 部件的资源可关闭降噪（QSettings 记忆）
         self._fills_check = bool(self._settings.value("checks/fills", True, type=bool))
+        # M30：快捷文件夹（收藏 + 最近拖入），QSettings 持久化
+        self._quick_favs: list[str] = []
+        self._quick_recents: list[str] = []
         # 重启兜底：上次的匹配表/拖入目录如果还存在，自动恢复
         saved = self._load_saved_map_path()
         if saved is not None and saved.exists():
@@ -101,6 +104,7 @@ class MainWindow(QMainWindow):
             self._last_folder = Path(saved_folder)
 
         self._build_ui()
+        self._load_quick_folders()                          # M30：恢复快捷文件夹 chips
         self.part_list.set_fills_check(self._fills_check)   # 启动时同步左栏橙点开关
         self.part_list.set_template(self._tpl)              # 分类 chips 顺序来源
         if self._tpl:
@@ -130,6 +134,10 @@ class MainWindow(QMainWindow):
         self.drop.pick_namemap_requested.connect(self._pick_map_file)
         self.drop.auto_refresh_act.setChecked(self._auto_refresh)
         self.drop.auto_refresh_toggled.connect(self._on_auto_refresh_toggled)
+        # M30：快捷文件夹 chips（点击切换 / 星标收藏 / 移除）
+        self.drop.quick_folder_clicked.connect(self._on_quick_folder_clicked)
+        self.drop.quick_folder_star_toggled.connect(self._on_quick_star_toggled)
+        self.drop.quick_folder_removed.connect(self._on_quick_removed)
         top.addWidget(self.drop, 1)  # 占满左侧
         top.addSpacing(8)
         top.addWidget(QLabel("模板"))
@@ -252,6 +260,88 @@ class MainWindow(QMainWindow):
                 f"ℹ 未识别到符合模板的部件文件夹（忽略 {len(self._result.ignored)} 项）"
             )
         self._setup_dir_watcher(folder)
+        self._record_quick_folder(folder)
+
+    # ---------------- M30：快捷文件夹（收藏 + 最近） ----------------
+    QUICK_RECENT_MAX = 5     # 最近列表上限（收藏不计入、不被挤掉）
+    QUICK_FAV_MAX = 8        # 收藏上限
+
+    def _load_quick_folders(self) -> None:
+        """从 QSettings 读收藏/最近列表；已不存在的目录自动剔除。
+
+        注意：QSettings `type=list` 对单元素列表返回 str 而非 list（Qt 特性），
+        必须先归一化，否则只剩 1 个目录时会被逐字符过滤成空。
+        """
+        def norm(v) -> list[str]:
+            if v is None:
+                return []
+            return [v] if isinstance(v, str) else list(v)
+        favs = [p for p in norm(self._settings.value("folders/favs", [], type=list))
+                if Path(p).is_dir()]
+        recents = [p for p in norm(self._settings.value("folders/recents", [], type=list))
+                   if Path(p).is_dir() and p not in favs]
+        self._quick_favs = favs
+        self._quick_recents = recents
+        self._refresh_quick_chips()
+
+    def _refresh_quick_chips(self) -> None:
+        self.drop.set_quick_folders(
+            [Path(p) for p in self._quick_favs],
+            [Path(p) for p in self._quick_recents],
+        )
+
+    def _save_quick_folders(self) -> None:
+        self._settings.setValue("folders/favs", self._quick_favs)
+        self._settings.setValue("folders/recents", self._quick_recents)
+        self._settings.sync()
+
+    def _record_quick_folder(self, folder: Path) -> None:
+        """拖入成功后记入「最近」：去重、最新在前、超上限挤掉最旧；收藏不动。"""
+        s = str(folder)
+        if s in self._quick_favs:
+            self._refresh_quick_chips()
+            return
+        if s in self._quick_recents:
+            self._quick_recents.remove(s)
+        self._quick_recents.insert(0, s)
+        del self._quick_recents[self.QUICK_RECENT_MAX:]
+        self._save_quick_folders()
+        self._refresh_quick_chips()
+
+    def _on_quick_folder_clicked(self, folder: Path) -> None:
+        if not folder.is_dir():
+            self.statusBar().showMessage(f"⚠ 快捷目录已不存在: {folder}")
+            return
+        self._on_folder_dropped(folder)
+        self.statusBar().showMessage(f"📁 已切换到快捷目录: {folder}")
+
+    def _on_quick_star_toggled(self, folder: Path, star: bool) -> None:
+        s = str(folder)
+        if star:
+            if s in self._quick_favs:
+                self._quick_favs.remove(s)
+            self._quick_favs.insert(0, s)
+            del self._quick_favs[self.QUICK_FAV_MAX:]
+            if s in self._quick_recents:
+                self._quick_recents.remove(s)
+        else:
+            if s in self._quick_favs:
+                self._quick_favs.remove(s)
+            if s not in self._quick_recents:
+                self._quick_recents.insert(0, s)
+                del self._quick_recents[self.QUICK_RECENT_MAX:]
+        self._save_quick_folders()
+        self._refresh_quick_chips()
+
+    def _on_quick_removed(self, folder: Path) -> None:
+        s = str(folder)
+        if s in self._quick_favs:
+            self._quick_favs.remove(s)
+        if s in self._quick_recents:
+            self._quick_recents.remove(s)
+        self._save_quick_folders()
+        self._refresh_quick_chips()
+        self.statusBar().showMessage(f"🗑 已从快捷列表移除: {folder.name}")
 
     # ---------------- M24：文件夹变更自动刷新 ----------------
     # watch 上限：超过则降级为「root + 套装父目录 + 部件目录」级监听
