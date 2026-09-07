@@ -1,8 +1,8 @@
 """M27 测试：默认播放动作按类型优化（idle / ride_idle）。
 
-背景：原实现取 sorted(可用动作)[0]，主角 E 方向约定动作是
-[idle, attack, run, ride_idle, ride_run]，字母序第一个是 attack，
-打开就播攻击动画。改为按类型优先：常规类型 idle、坐骑 ride_idle。
+背景：原实现取 sorted(可用动作)[0]，主角 SE 方向约定动作是
+[idle, run, attack, skill, hurt, block, dead, ride_idle, ride_run]，
+字母序第一个是 attack，打开就播攻击动画。改为按类型优先：常规类型 idle、坐骑 ride_idle。
 
 覆盖：
 1. 主角（protagonist）：E 有 idle/attack/run → 默认 idle（而非 attack）
@@ -103,13 +103,37 @@ try:
     print(f"[5] OK 伙伴: 动作={a5}（类型 {p5.effective_type}）")
 
     # ---- 6) 优先动作缺失 → 回退字母序第一个 ----
+    # 用 NW 方向构造（2026-09-04 起主角 E/N/S 不再约定 attack，
+    # E 方向已无法用 attack 验证「字母序第一个」的回退链）。
     noidle = tmp / "noidle"
-    make_act(noidle, "50112152_body", "E", "attack")
-    make_act(noidle, "50112152_body", "E", "run")
+    make_act(noidle, "50112152_body", "NW", "attack")
+    make_act(noidle, "50112152_body", "NW", "run")
     p6 = scan_root(noidle, tpl).parts[0]
     d6, a6 = default_action_of(p6)
     assert a6 == "attack", f"idle 缺失时应回退字母序第一个 attack，实际 {a6}"
     print(f"[6] OK 回退: 无 idle → {a6}")
+
+    # ---- 6b) 2026-09-04：主角 E/N/S 不再约定 attack → 不报缺失、默认落 run ----
+    noatk = tmp / "noatk"
+    for d in ("E", "N", "S", "SE"):
+        for a in ("idle", "run", "ride_idle", "ride_run"):
+            make_act(noatk, "50112153_body", d, a)
+    p6b = scan_root(noatk, tpl).parts[0]
+    miss6b = p6b.missing_actions
+    assert not any(k in ("E", "N", "S") for k in miss6b), \
+        f"主角 E/N/S 无 attack 不应报缺失，实际 {miss6b}"
+    # 反向：SE 仍要求 attack → 必须照常报缺失（防基准被误删过头）
+    assert "attack" in miss6b.get("SE", []), f"主角 SE 仍应报缺 attack，实际 {miss6b}"
+    d6b, a6b = default_action_of(p6b)
+    assert a6b == "idle", f"默认动作应为 idle，实际 {a6b}"
+    m = ButtonMatrix()
+    m.set_template(tpl)
+    m.show_part(p6b, "E", None)
+    assert m.act_stack._buttons["attack"].property("missing") is False, \
+        "主角 E 不应把 attack 标为缺失"
+    assert m.act_stack._buttons["attack"].property("unexpected") is True, \
+        "主角 E 的 attack 应标为「本类型不需」灰显"
+    print("[6b] OK 主角 E/N/S 不再要求 attack（灰显），SE 仍要求")
 
     # ---- 7) pick_default_action 纯函数 ----
     assert pick_default_action("protagonist", ["attack", "idle", "run"]) == "idle"

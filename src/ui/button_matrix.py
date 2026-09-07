@@ -21,9 +21,9 @@ DEFAULT_DIRECTION = "SE"
 # 用户 2026-08-29 要求「打开先看待机」：常规类型（主角/伙伴/怪物/BOSS/NPC/翅膀）
 # 优先 idle，坐骑类（mount）优先 ride_idle；都没有则回退字母序第一个。
 #
-# ⚠ 不能直接取 sorted(可用动作)[0]：主角 E 方向约定动作是
-# [idle, attack, run, ride_idle, ride_run]，字母序第一个是 attack，
-# 打开就播攻击动画，不符合直觉。
+# ⚠ 不能直接取 sorted(可用动作)[0]：主角 SE 方向约定动作是
+# [idle, run, attack, skill, hurt, block, dead, ride_idle, ride_run]，
+# 字母序第一个是 attack，打开就播攻击动画，不符合直觉。
 DEFAULT_ACTION = "idle"
 DEFAULT_ACTION_BY_TYPE = {"mount": "ride_idle"}
 
