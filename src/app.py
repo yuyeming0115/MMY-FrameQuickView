@@ -240,6 +240,7 @@ class MainWindow(QMainWindow):
         self._wing_library = list(self._result.wing_library)
         self._wing_by_key = {p.name: p for p in self._wing_library}
         self.drop.set_current(str(folder))
+        self.drop.set_current_folder(folder)   # M31：chip 激活态高亮当前目录
         self._setup_namemap(folder)
         self.part_list.set_namemap(self._namemap)
         # 先清空上一轮选择状态，再重建列表：load_result 会自动选中第一项并同步

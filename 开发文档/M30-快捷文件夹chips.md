@@ -43,6 +43,18 @@
 
 > 注：坑点 2 的归一化如未实现，遇到「最近只剩 1 个目录重启后消失」即此因。
 
+## M31 追加：当前目录激活态高亮（2026-09-08）
+
+- **需求**：用户希望一眼看出当前浏览中的目录对应哪个 chip → 激活 chip 用金色高亮
+  （金边 + 金字 + 淡金底 `rgba(212,175,55,0.18)` + 加粗），比收藏态（仅金字+半透明金边）更醒目。
+- **实现**：
+  - `drop_zone.py`：新增 `_CHIP_ACTIVE_STYLE`；`DropZone._current_folder` 记录当前目录；
+    `set_current_folder(folder)` 增量刷新（`_restyle_chips` 按 `btn._folder` 重新套样式，不重建列表）；
+    `_make_chip` 重建时同样应用激活态（激活态优先于收藏态）。
+  - `app.py`：`_on_folder_dropped` 中调用 `self.drop.set_current_folder(folder)`。
+- **细节**：路径比较用 `str(folder) == str(current)`（同一来源记录，无需大小写归一）；
+  `set_current_folder` 与 `_record_quick_folder` 的 chips 重建顺序无关紧要——重建也读 `_current_folder`。
+
 ## 后续可扩展
 
 - chip 支持中文名显示（复用匹配表）；

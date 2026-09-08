@@ -20,6 +20,12 @@ _CHIP_FAV_STYLE = _CHIP_STYLE.replace(
 ).replace(
     "border: 1px solid #3A3F46;", "border: 1px solid rgba(212,175,55,0.5);"
 )
+# 激活态（当前浏览中的目录）：金边 + 金字 + 淡金底，比收藏态更醒目
+_CHIP_ACTIVE_STYLE = (
+    "QToolButton { padding: 2px 10px; border: 1px solid #D4AF37; border-radius: 10px;"
+    " background: rgba(212,175,55,0.18); color: #D4AF37; font-size: 14px; font-weight: bold; }"
+    "QToolButton:hover { background: rgba(212,175,55,0.32); }"
+)
 
 
 class DropZone(QFrame):
@@ -36,6 +42,7 @@ class DropZone(QFrame):
         super().__init__(parent)
         self.setObjectName("dropZone")
         self.setAcceptDrops(True)
+        self._current_folder: Path | None = None   # M31：当前浏览中的目录（chip 激活态）
         self._label = QLabel("⬇ 拖入部件文件夹 / 父级目录（任意位置均可拖入）")
         self._label.setObjectName("dropHint")
 
@@ -97,7 +104,7 @@ class DropZone(QFrame):
 
     # ---------------- M30：快捷文件夹 chips ----------------
     def set_quick_folders(self, favs: list[Path], recents: list[Path]) -> None:
-        """重建 chips 行：收藏（★金框）在前，最近在后。
+        """重建 chips 行：收藏（★金框）在前，最近在后；当前目录 chip 金色高亮。
 
         每个 chip：左键点击切换目录；右键菜单 = 固定/取消收藏、移除。
         """
@@ -113,11 +120,36 @@ class DropZone(QFrame):
         has_any = bool(favs or recents)
         self._chips_widget.setVisible(has_any)
 
+    def set_current_folder(self, folder: Path | None) -> None:
+        """更新「当前浏览中」目录并刷新 chip 激活态（不动列表内容）。"""
+        if self._current_folder == folder:
+            return
+        self._current_folder = folder
+        self._restyle_chips()
+
+    def _restyle_chips(self) -> None:
+        """按 _current_folder 重新套用各 chip 样式（不动列表内容）。"""
+        for btn in self._chips_widget.findChildren(QToolButton):
+            folder = getattr(btn, "_folder", None)
+            if folder is None:
+                continue
+            fav = btn.text().startswith("★ ")
+            active = (
+                self._current_folder is not None
+                and str(folder) == str(self._current_folder)
+            )
+            btn.setStyleSheet(_CHIP_ACTIVE_STYLE if active else
+                              (_CHIP_FAV_STYLE if fav else _CHIP_STYLE))
+
     def _make_chip(self, folder: Path, fav: bool) -> QToolButton:
         btn = QToolButton(self._chips_widget)
         btn.setText(("★ " if fav else "") + folder.name)
         btn.setToolTip(("★ 收藏　" if fav else "") + str(folder))
-        btn.setStyleSheet(_CHIP_FAV_STYLE if fav else _CHIP_STYLE)
+        btn._folder = folder
+        active = (self._current_folder is not None
+                  and str(folder) == str(self._current_folder))
+        btn.setStyleSheet(_CHIP_ACTIVE_STYLE if active else
+                          (_CHIP_FAV_STYLE if fav else _CHIP_STYLE))
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.clicked.connect(lambda _=False, f=folder: self.quick_folder_clicked.emit(f))
         btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
