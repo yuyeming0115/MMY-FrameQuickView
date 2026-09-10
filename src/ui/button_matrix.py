@@ -67,9 +67,9 @@ QPushButton[unexpected="true"] {
 """
 LABEL_STYLE = "color: #96A1AD; font-size: 12px; padding: 2px 0 1px 2px; letter-spacing: 1px;"
 
-# M32.2 角标分色（用户反馈：方向/动作角标同色易混）：
-# 金色 = 动作按钮·帧数；蓝色 = 方向按钮·动作数；红色 = 断档/帧数不一致（优先级最高）
-BADGE_GOLD = "QLabel { background: #D4AF37; color: #1E2023; font-size: 11px; font-weight: 500; border-radius: 8px; padding: 0 5px; }"
+# M32.3 角标分色（用户反馈迭代：金→紫）：蓝色 = 方向按钮·动作数；
+# 紫色 = 动作按钮·帧数；红色 = 断档/帧数不一致（优先级最高）
+BADGE_PURPLE = "QLabel { background: #9C6ADE; color: #FFFFFF; font-size: 11px; font-weight: 500; border-radius: 8px; padding: 0 5px; }"
 BADGE_BLUE = "QLabel { background: #4C8FD6; color: #FFFFFF; font-size: 11px; font-weight: 500; border-radius: 8px; padding: 0 5px; }"
 BADGE_RED = "QLabel { background: #C74444; color: #FFFFFF; font-size: 11px; font-weight: 500; border-radius: 8px; padding: 0 5px; }"
 
@@ -83,12 +83,12 @@ class BadgeButton(QPushButton):
         self._badge.hide()
 
     def set_badge(self, text: str | None, danger: bool = False,
-                  tone: str = "gold") -> None:
+                  tone: str = "purple") -> None:
         if not text:
             self._badge.hide()
             return
         self._badge.setText(text)
-        style = BADGE_RED if danger else (BADGE_BLUE if tone == "blue" else BADGE_GOLD)
+        style = BADGE_RED if danger else (BADGE_BLUE if tone == "blue" else BADGE_PURPLE)
         self._badge.setStyleSheet(style)
         self._badge.adjustSize()
         self._reposition_badge()
@@ -158,7 +158,7 @@ class ButtonStack(QFrame):
                 unexpected: set[str] | None = None,
                 counts: dict[str, int] | None = None,
                 danger: set[str] | None = None,
-                badge_tone: str = "gold") -> None:
+                badge_tone: str = "purple") -> None:
         unexpected = unexpected or set()
         counts = counts or {}
         danger = danger or set()

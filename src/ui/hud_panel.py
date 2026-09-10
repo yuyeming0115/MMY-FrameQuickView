@@ -61,6 +61,8 @@ class HUDPanel(QScrollArea):
         self._label = QLabel()
         self._label.setTextFormat(Qt.TextFormat.RichText)
         self._label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        # M32.3：必须开 wordWrap——富文本默认不折行，长行会溢出 320px 视口被裁切
+        self._label.setWordWrap(True)
         self._label.setStyleSheet(
             "QLabel { background: transparent; color: #E8E4D9;"
             " font-size: 14px; padding: 8px 10px; }"
@@ -116,10 +118,12 @@ class HUDPanel(QScrollArea):
         return header + self._render_expanded(stats)
 
     def _render_expanded(self, stats: HudStats) -> str:
-        """展开视图（M32.2）：一行一个方向，行内「动作 帧」流式排列。
+        """展开视图（M32.3）：一行一个方向，「方向-总帧数」内联后接动作 chips。
 
-        用户反馈完整列表一行一组合太长（25 行遮挡画布），改为按方向归组后
-        25 行 → 方向数行（通常 5~6 行），方向内动作横向排布自动折行。
+        用户反馈迭代：
+        - M32.2 逐组合一行太长 → 按方向归组
+        - M32.3 方向帧数小计从第二行提到行内（如「E-64帧」），后接动作流；
+          QLabel 开 wordWrap 后自动折行，不再被右侧裁切
         """
         cur_dir, cur_act = stats.current or (None, None)
         dirs: list[str] = []
@@ -139,7 +143,9 @@ class HUDPanel(QScrollArea):
                 dc = _COLOR_RED
             else:
                 dc = _COLOR_LABEL
-            chips: list[str] = []
+            n_d = sum(r.count for r in rows)
+            chips: list[str] = [f"<span style='color:{dc}; font-weight:700;'>{d}</span>"
+                                f"<span style='color:{_COLOR_DIM};'>-{n_d}帧</span>"]
             for r in rows:
                 cur = (r.direction == cur_dir and r.action == cur_act)
                 if cur:
@@ -153,21 +159,12 @@ class HUDPanel(QScrollArea):
                 if r.has_issues:
                     chip += self._render_chip_annot(r)
                 chips.append(chip)
-            n_d = sum(r.count for r in rows)
-            body.append(
-                "<tr>"
-                f"<td valign='top' style='color:{dc}; white-space:nowrap;"
-                f" padding:2px 10px 2px 0;'>{d}"
-                f"<div style='color:{_COLOR_DIM}; font-size:11px;'>{n_d}帧</div></td>"
-                f"<td style='padding:2px 0;'>{' · '.join(chips)}</td>"
-                "</tr>"
-            )
+            body.append(f"<div style='margin:1px 0;'>{' · '.join(chips)}</div>")
         n_dirs = len(dirs)
         n_acts = len({r.action for r in stats.rows})
-        return ("<table width='100%' cellspacing='0' cellpadding='0'>"
-                + "".join(body)
-                + self._render_total(stats, f"{stats.grand} 帧 · {n_dirs}方向 × {n_acts}动作")
-                + "</table>")
+        return ("".join(body)
+                + f"<div style='margin-top:5px; color:{_COLOR_GOLD};'>"
+                + f"合计 {stats.grand} 帧 · {n_dirs}方向 × {n_acts}动作</div>")
 
     def _render_chip_annot(self, r: ComboStat) -> str:
         """异常 chip 的红字标注：断档帧号 / 不一致部件（截断到 2 条防折行爆炸）。"""
