@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 
 from .core.namemap import NameMap, discover_map_file
 from .core.scanner import IdGroup, PartData, ScanResult, scan_root
+from .core.stats import build_hud_stats
 from .core.template import Template, load_templates
 from .ui.anim_view import AnimView
 from .ui.button_matrix import ButtonMatrix
@@ -92,6 +93,9 @@ class MainWindow(QMainWindow):
         self._fx_layer_indices: set[int] = set()
         # fills 警告检测开关：NPC/翅膀/主角/坐骑等无 fills 部件的资源可关闭降噪（QSettings 记忆）
         self._fills_check = bool(self._settings.value("checks/fills", True, type=bool))
+        # M30：快捷文件夹（收藏 + 最近拖入），QSettings 持久化
+        self._quick_favs: list[str] = []
+        self._quick_recents: list[str] = []
         # 重启兜底：上次的匹配表/拖入目录如果还存在，自动恢复
         saved = self._load_saved_map_path()
         if saved is not None and saved.exists():
@@ -101,12 +105,16 @@ class MainWindow(QMainWindow):
             self._last_folder = Path(saved_folder)
 
         self._build_ui()
+        self._load_quick_folders()                          # M30：恢复快捷文件夹 chips
         self.part_list.set_fills_check(self._fills_check)   # 启动时同步左栏橙点开关
         self.part_list.set_template(self._tpl)              # 分类 chips 顺序来源
         if self._tpl:
             self.matrix.set_template(self._tpl)
             self.anim_view.set_available_dirs(set(self._tpl.directions))
         self.statusBar().showMessage("就绪 · 拖入文件夹开始")
+        # 恢复 HUD 信息面板开关（M32，默认开）
+        self.anim_view.set_hud_visible(
+            bool(self._settings.value("hud/visible", True, type=bool)))
         # 恢复 A区「原图/自适应」模式
         saved_fit = self._settings.value("grid/fit_mode", False)
         if saved_fit is not None and bool(saved_fit) != self.grid_view._mode_btn.isChecked():
@@ -130,6 +138,10 @@ class MainWindow(QMainWindow):
         self.drop.pick_namemap_requested.connect(self._pick_map_file)
         self.drop.auto_refresh_act.setChecked(self._auto_refresh)
         self.drop.auto_refresh_toggled.connect(self._on_auto_refresh_toggled)
+        # M30：快捷文件夹 chips（点击切换 / 星标收藏 / 移除）
+        self.drop.quick_folder_clicked.connect(self._on_quick_folder_clicked)
+        self.drop.quick_folder_star_toggled.connect(self._on_quick_star_toggled)
+        self.drop.quick_folder_removed.connect(self._on_quick_removed)
         top.addWidget(self.drop, 1)  # 占满左侧
         top.addSpacing(8)
         top.addWidget(QLabel("模板"))
@@ -195,6 +207,8 @@ class MainWindow(QMainWindow):
         self.anim_view.fx_offset_changed.connect(self._on_fx_offset_changed)
         self.anim_view.fx_dressed_signal().connect(self._on_fx_dressed)  # M26 穿戴特效
         self.anim_view.wing_dressed_signal().connect(self._on_wing_dressed)  # M28 穿戴翅膀
+        # M32：HUD 信息面板开关持久化
+        self.anim_view.hud_toggled.connect(self._on_hud_toggled)
         panes.addWidget(self.grid_view)
         panes.addWidget(self.anim_view)
         panes.setStretchFactor(0, 5)
@@ -232,6 +246,7 @@ class MainWindow(QMainWindow):
         self._wing_library = list(self._result.wing_library)
         self._wing_by_key = {p.name: p for p in self._wing_library}
         self.drop.set_current(str(folder))
+        self.drop.set_current_folder(folder)   # M31：chip 激活态高亮当前目录
         self._setup_namemap(folder)
         self.part_list.set_namemap(self._namemap)
         # 先清空上一轮选择状态，再重建列表：load_result 会自动选中第一项并同步
@@ -252,6 +267,88 @@ class MainWindow(QMainWindow):
                 f"ℹ 未识别到符合模板的部件文件夹（忽略 {len(self._result.ignored)} 项）"
             )
         self._setup_dir_watcher(folder)
+        self._record_quick_folder(folder)
+
+    # ---------------- M30：快捷文件夹（收藏 + 最近） ----------------
+    QUICK_RECENT_MAX = 5     # 最近列表上限（收藏不计入、不被挤掉）
+    QUICK_FAV_MAX = 8        # 收藏上限
+
+    def _load_quick_folders(self) -> None:
+        """从 QSettings 读收藏/最近列表；已不存在的目录自动剔除。
+
+        注意：QSettings `type=list` 对单元素列表返回 str 而非 list（Qt 特性），
+        必须先归一化，否则只剩 1 个目录时会被逐字符过滤成空。
+        """
+        def norm(v) -> list[str]:
+            if v is None:
+                return []
+            return [v] if isinstance(v, str) else list(v)
+        favs = [p for p in norm(self._settings.value("folders/favs", [], type=list))
+                if Path(p).is_dir()]
+        recents = [p for p in norm(self._settings.value("folders/recents", [], type=list))
+                   if Path(p).is_dir() and p not in favs]
+        self._quick_favs = favs
+        self._quick_recents = recents
+        self._refresh_quick_chips()
+
+    def _refresh_quick_chips(self) -> None:
+        self.drop.set_quick_folders(
+            [Path(p) for p in self._quick_favs],
+            [Path(p) for p in self._quick_recents],
+        )
+
+    def _save_quick_folders(self) -> None:
+        self._settings.setValue("folders/favs", self._quick_favs)
+        self._settings.setValue("folders/recents", self._quick_recents)
+        self._settings.sync()
+
+    def _record_quick_folder(self, folder: Path) -> None:
+        """拖入成功后记入「最近」：去重、最新在前、超上限挤掉最旧；收藏不动。"""
+        s = str(folder)
+        if s in self._quick_favs:
+            self._refresh_quick_chips()
+            return
+        if s in self._quick_recents:
+            self._quick_recents.remove(s)
+        self._quick_recents.insert(0, s)
+        del self._quick_recents[self.QUICK_RECENT_MAX:]
+        self._save_quick_folders()
+        self._refresh_quick_chips()
+
+    def _on_quick_folder_clicked(self, folder: Path) -> None:
+        if not folder.is_dir():
+            self.statusBar().showMessage(f"⚠ 快捷目录已不存在: {folder}")
+            return
+        self._on_folder_dropped(folder)
+        self.statusBar().showMessage(f"📁 已切换到快捷目录: {folder}")
+
+    def _on_quick_star_toggled(self, folder: Path, star: bool) -> None:
+        s = str(folder)
+        if star:
+            if s in self._quick_favs:
+                self._quick_favs.remove(s)
+            self._quick_favs.insert(0, s)
+            del self._quick_favs[self.QUICK_FAV_MAX:]
+            if s in self._quick_recents:
+                self._quick_recents.remove(s)
+        else:
+            if s in self._quick_favs:
+                self._quick_favs.remove(s)
+            if s not in self._quick_recents:
+                self._quick_recents.insert(0, s)
+                del self._quick_recents[self.QUICK_RECENT_MAX:]
+        self._save_quick_folders()
+        self._refresh_quick_chips()
+
+    def _on_quick_removed(self, folder: Path) -> None:
+        s = str(folder)
+        if s in self._quick_favs:
+            self._quick_favs.remove(s)
+        if s in self._quick_recents:
+            self._quick_recents.remove(s)
+        self._save_quick_folders()
+        self._refresh_quick_chips()
+        self.statusBar().showMessage(f"🗑 已从快捷列表移除: {folder.name}")
 
     # ---------------- M24：文件夹变更自动刷新 ----------------
     # watch 上限：超过则降级为「root + 套装父目录 + 部件目录」级监听
@@ -624,6 +721,36 @@ class MainWindow(QMainWindow):
         self._show_grid()
         self._show_anim()
         self._refresh_status()
+        self._update_hud()
+
+    # ---------------- M32：HUD 信息面板 ----------------
+    def _update_hud(self) -> None:
+        """HUD 帧数账目：随选择/方向/动作/显隐变化全量刷新（纯内存，零 IO）。"""
+        if self._part is None and self._group is None:
+            self.anim_view.update_hud(None)
+            return
+        direction, action = self.matrix.current()
+        if self._part is not None:
+            stats = build_hud_stats(self._part, self._tpl)
+            cn = self._namemap.lookup(self._part.name, self._part.res_id) \
+                if self._namemap is not None else None
+            stats.title = cn or self._part.name
+            stats.subtitle = f"ID {self._part.res_id} · {self._part.part or '整体'}"
+        else:
+            stats = build_hud_stats(self._group, self._tpl)
+            gname = self._group.display_name or self._group.res_id
+            cn = self._namemap.lookup(gname, self._group.res_id) \
+                if self._namemap is not None else None
+            stats.title = cn or gname
+            n = len(self._group.parts)
+            stats.subtitle = (f"套装 · {n}件" if self._group.is_outfit
+                              else f"ID {self._group.res_id} · {n}部件")
+        stats.current = (direction, action)
+        self.anim_view.update_hud(stats)
+
+    def _on_hud_toggled(self, visible: bool) -> None:
+        self._settings.setValue("hud/visible", visible)
+        self._settings.sync()
 
     def _on_grid_frame_clicked(self, idx: int) -> None:
         """A 区点击某帧 → B 区跳转并暂停，方便逐帧对照。"""

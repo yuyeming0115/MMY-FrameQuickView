@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from .hover_scroll import enable_hover_scroll
+from .hud_panel import HUDPanel
 from .worker import DecodeWorker
 
 
@@ -479,6 +480,7 @@ class AnimView(QFrame):
     frame_clicked = Signal(int)  # B 区点击当前帧时发出（与 A 区保持一致）
     direction_overlay_clicked = Signal(str)  # 画布内点击/拖拽某方向热区时发出（等同按钮矩阵的方向点击）
     fx_offset_changed = Signal(str, int, int)  # (part_key, dx, dy) 特效偏移微调
+    hud_toggled = Signal(bool)  # M32：HUD 信息面板开关变化（上层持久化用）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -538,6 +540,12 @@ class AnimView(QFrame):
         self._toggles.hide()
         stack_host.installEventFilter(self)
 
+        # M32：HUD 信息面板（帧数账目），同模式悬浮于右下角；
+        # M32.1 紧凑/悬停展开高度变化 → 重新锚定右下角
+        self._hud = HUDPanel(stack_host)
+        self._hud.size_changed.connect(self._reposition_hud)
+        self._hud.hide()
+
         outer.addWidget(stack_host, 1)
 
         # ---- 底部整行：控制条 ----
@@ -578,6 +586,21 @@ class AnimView(QFrame):
         self._checker_chk.setStyleSheet("color: #96A1AD;")
         self._checker_chk.toggled.connect(self._canvas.set_checker)
         bar.addWidget(self._checker_chk)
+
+        # M32：HUD 信息面板开关（默认开，QSettings 持久化由上层接管）
+        self._hud_btn = QPushButton("📊 HUD")
+        self._hud_btn.setCheckable(True)
+        self._hud_btn.setChecked(True)
+        self._hud_btn.setToolTip(
+            "HUD 帧数账目面板开关：\n"
+            "显示当前资源（含套装）各「方向-动作」帧数 + 帧号范围 + 合计\n"
+            "位于画布右下角，部件帧数不一致处标 ⚠"
+        )
+        self._hud_btn.setStyleSheet(
+            "QPushButton:checked { color: #D4AF37; border-color: #D4AF37; }"
+        )
+        self._hud_btn.toggled.connect(self._on_hud_toggled)
+        bar.addWidget(self._hud_btn)
 
         bar.addStretch(1)
         outer.addLayout(bar)
@@ -644,6 +667,40 @@ class AnimView(QFrame):
     def hide_part_toggles(self) -> None:
         """单部件视图/无选中：隐藏右侧 toggle 列表。"""
         self._toggles.hide()
+
+    # ---------------- M32：HUD 信息面板 ----------------
+    def update_hud(self, stats) -> None:
+        """全量刷新 HUD 内容（stats: HudStats | None）；可见时同步位置。"""
+        self._hud.set_stats(stats)
+        if self._hud.isVisible():
+            self._reposition_hud()
+
+    def set_hud_visible(self, visible: bool) -> None:
+        """启动恢复开关状态（不重复发信号）。"""
+        if self._hud_btn.isChecked() != visible:
+            self._hud_btn.blockSignals(True)
+            self._hud_btn.setChecked(visible)
+            self._hud_btn.blockSignals(False)
+        self._hud.setVisible(visible)
+        if visible:
+            self._reposition_hud()
+
+    def _on_hud_toggled(self, visible: bool) -> None:
+        self._hud.setVisible(visible)
+        if visible:
+            self._reposition_hud()
+        self.hud_toggled.emit(visible)
+
+    def _reposition_hud(self) -> None:
+        """锚定画布右下角；高度上限 = 宿主 90%（M32.5：75% 会让展开账目出滚动条）。"""
+        host, hud = self._stack_host, self._hud
+        if not hud.isVisible() or host.width() <= 0:
+            return
+        content_h = hud.widget().sizeHint().height() + 2 * hud.frameWidth() + 4
+        max_h = int(host.height() * 0.9)
+        h = max(60, min(content_h, max_h))
+        hud.setFixedHeight(h)
+        hud.move(host.width() - hud.width() - 12, host.height() - h - 10)
 
     def set_fx_part_keys(self, keys: list[str]) -> None:
         """设置各层 part_key 列表（与 layers 同序），供键盘微调信号使用。
@@ -735,9 +792,11 @@ class AnimView(QFrame):
         tog.raise_()
 
     def eventFilter(self, obj, event) -> bool:
-        """stack_host 尺寸变化（splitter 拖动/窗口缩放）时同步 toggle 位置。"""
+        """stack_host 尺寸变化（splitter 拖动/窗口缩放）时同步 toggle/HUD 位置。"""
         if obj is self._stack_host and event.type() == QEvent.Type.Resize:
             self._reposition_toggles()
+            if self._hud.isVisible():
+                self._reposition_hud()
         return super().eventFilter(obj, event)
 
     def part_toggles_signal(self):

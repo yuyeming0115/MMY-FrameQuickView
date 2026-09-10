@@ -10,6 +10,7 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QPushButton, QHBoxLayout, QSizePolicy
 
 from ..core.scanner import PartData, IdGroup
+from ..core.stats import group_combos, part_combos
 from ..core.template import Template
 
 # 默认方向：首次进入某部件/组（direction=None）时高亮的方向。
@@ -66,6 +67,44 @@ QPushButton[unexpected="true"] {
 """
 LABEL_STYLE = "color: #96A1AD; font-size: 12px; padding: 2px 0 1px 2px; letter-spacing: 1px;"
 
+# M32.3 角标分色（用户反馈迭代：金→紫）：蓝色 = 方向按钮·动作数；
+# 紫色 = 动作按钮·帧数；红色 = 断档/帧数不一致（优先级最高）
+BADGE_PURPLE = "QLabel { background: #9C6ADE; color: #FFFFFF; font-size: 11px; font-weight: 500; border-radius: 8px; padding: 0 5px; }"
+BADGE_BLUE = "QLabel { background: #4C8FD6; color: #FFFFFF; font-size: 11px; font-weight: 500; border-radius: 8px; padding: 0 5px; }"
+BADGE_RED = "QLabel { background: #C74444; color: #FFFFFF; font-size: 11px; font-weight: 500; border-radius: 8px; padding: 0 5px; }"
+
+
+class BadgeButton(QPushButton):
+    """带右上角帧数角标的按钮（M32）：金角标 = 帧数，红角标 = 断档/不一致。"""
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self._badge = QLabel(self)
+        self._badge.hide()
+
+    def set_badge(self, text: str | None, danger: bool = False,
+                  tone: str = "purple") -> None:
+        if not text:
+            self._badge.hide()
+            return
+        self._badge.setText(text)
+        style = BADGE_RED if danger else (BADGE_BLUE if tone == "blue" else BADGE_PURPLE)
+        self._badge.setStyleSheet(style)
+        self._badge.adjustSize()
+        self._reposition_badge()
+        self._badge.show()
+        self._badge.raise_()
+
+    def _reposition_badge(self) -> None:
+        b = self._badge
+        if not b.isVisible() and not b.text():
+            return
+        b.move(max(1, self.width() - b.width() - 3), 1)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._reposition_badge()
+
 
 class ButtonStack(QFrame):
     """一组按钮：上方一行 label（可选右侧 toggle button），下方竖直堆叠一列按钮（B 区左侧占位用）。
@@ -116,8 +155,13 @@ class ButtonStack(QFrame):
         self._buttons: dict[str, QPushButton] = {}
 
     def rebuild(self, names: list[str], missing: set[str], current: str | None,
-                unexpected: set[str] | None = None) -> None:
+                unexpected: set[str] | None = None,
+                counts: dict[str, int] | None = None,
+                danger: set[str] | None = None,
+                badge_tone: str = "purple") -> None:
         unexpected = unexpected or set()
+        counts = counts or {}
+        danger = danger or set()
         for btn in self._buttons.values():
             self._layout.removeWidget(btn)
             btn.deleteLater()
@@ -128,13 +172,15 @@ class ButtonStack(QFrame):
             if item.widget() is not None:
                 item.widget().deleteLater()
         for name in names:
-            btn = QPushButton(name)
+            btn = BadgeButton(name)
             btn.setCheckable(True)
             btn.setProperty("missing", name in missing)
             if name in unexpected:
                 btn.setProperty("unexpected", True)
             btn.setStyleSheet(BTN_STYLE)
             btn.setChecked(name == current)
+            if name in counts:
+                btn.set_badge(str(counts[name]), danger=name in danger, tone=badge_tone)
             btn.clicked.connect(lambda _=False, n=name: self.selected.emit(n))
             self._layout.addWidget(btn)
             self._buttons[name] = btn
@@ -191,11 +237,15 @@ class ButtonMatrix(QFrame):
             avail = part.available_directions()
             if direction not in avail:
                 direction = avail[0] if avail else None
-            self.dir_stack.rebuild(avail, set(), direction)
+            # M32.1：方向角标 = 该虚拟方向下的序列数
+            dir_counts = {d: len(part.available_actions(d)) for d in avail}
+            self.dir_stack.rebuild(avail, set(), direction, None,
+                                   counts=dir_counts, badge_tone="blue")
             acts = part.available_actions(direction) if direction else []
             if action not in acts:
                 action = acts[0] if acts else None
-            self.act_stack.rebuild(acts, set(), action)
+            self.act_stack.rebuild(acts, set(), action, None,
+                                   **self._part_badges(part, direction))
             return
         miss_dirs = set(part.missing_directions)
         if direction is None:
@@ -205,7 +255,15 @@ class ButtonMatrix(QFrame):
         elif direction in miss_dirs:
             avail = part.available_directions()
             direction = avail[0] if avail else None
-        self.dir_stack.rebuild(tpl.directions, miss_dirs, direction)
+        # M32.1：方向角标 = 该方向下的动作数；方向内有断档 → 红角标
+        dir_counts, dir_danger = {}, set()
+        for d in part.available_directions():
+            ads = [part.action_data(d, a) for a in part.available_actions(d)]
+            dir_counts[d] = len([ad for ad in ads if ad is not None])
+            if any(ad is not None and ad.gaps for ad in ads):
+                dir_danger.add(d)
+        self.dir_stack.rebuild(tpl.directions, miss_dirs, direction, None,
+                               counts=dir_counts, danger=dir_danger, badge_tone="blue")
 
         miss_acts: set[str] = set()
         if direction:
@@ -221,7 +279,22 @@ class ButtonMatrix(QFrame):
                     eff_type, sorted(expected & present), sorted(present))
         else:
             unexpected = set(tpl.actions)
-        self.act_stack.rebuild(tpl.actions, miss_acts, action, unexpected)
+        self.act_stack.rebuild(tpl.actions, miss_acts, action, unexpected,
+                               **self._part_badges(part, direction))
+
+    def _part_badges(self, part: PartData, direction: str | None) -> dict:
+        """M32：当前方向下各动作的帧数角标参数（断档 → 红角标）。"""
+        counts: dict[str, int] = {}
+        danger: set[str] = set()
+        if direction:
+            for a in part.available_actions(direction):
+                ad = part.action_data(direction, a)
+                if ad is None:
+                    continue
+                counts[a] = ad.count
+                if ad.gaps:
+                    danger.add(a)
+        return {"counts": counts, "danger": danger}
 
     def show_group(self, group: IdGroup, direction: str | None, action: str | None) -> None:
         """组视图：按钮基于组内所有部件的并集 (方向,动作)。
@@ -232,6 +305,8 @@ class ButtonMatrix(QFrame):
         tpl = self._tpl
         if tpl is None:
             return
+        # M32：组角标一次算全（并集行），当前方向的动作取对应行
+        st = group_combos(group, tpl)
         if group.is_flat:
             # 扁平资源组（特效类）：按钮来自组内并集（虚拟方向 + 序列前缀），无缺失标记
             avail_d: set[str] = set()
@@ -242,11 +317,15 @@ class ButtonMatrix(QFrame):
                     acts_by_dir.setdefault(d, set()).update(p.available_actions(d))
             if direction not in avail_d:
                 direction = sorted(avail_d)[0] if avail_d else None
-            self.dir_stack.rebuild(sorted(avail_d), set(), direction)
+            # M32.1：方向角标 = 该虚拟方向下的序列数
+            self.dir_stack.rebuild(sorted(avail_d), set(), direction, None,
+                                   counts={d: len(v) for d, v in acts_by_dir.items()},
+                                   badge_tone="blue")
             acts = sorted(acts_by_dir.get(direction, set())) if direction else []
             if action not in acts:
                 action = acts[0] if acts else None
-            self.act_stack.rebuild(acts, set(), action)
+            self.act_stack.rebuild(acts, set(), action, None,
+                                   **self._group_badges(st, direction))
             return
         avail_d: set[str] = set()
         owned_a: set[str] = set()
@@ -260,7 +339,9 @@ class ButtonMatrix(QFrame):
             direction = DEFAULT_DIRECTION if DEFAULT_DIRECTION in avail_d else (sorted(avail_d)[0] if avail_d else None)
         elif direction in miss_dirs:
             direction = sorted(avail_d)[0] if avail_d else None
-        self.dir_stack.rebuild(tpl.directions, miss_dirs, direction)
+        # M32.1：方向角标 = 该方向下的动作数（组内并集）；方向内有异常行 → 红角标
+        self.dir_stack.rebuild(tpl.directions, miss_dirs, direction, None,
+                               **self._dir_badges(st), badge_tone="blue")
 
         if direction:
             # 组级三态：以「类型 × 方向」基准对照组内并集拥有（见 scanner._group_parts）
@@ -275,9 +356,34 @@ class ButtonMatrix(QFrame):
             if action is None or action in miss_acts:
                 action = pick_default_action(
                     eff_type, sorted(expected & owned_a_dir), sorted(owned_a_dir))
-            self.act_stack.rebuild(tpl.actions, miss_acts, action, unexpected)
+            self.act_stack.rebuild(tpl.actions, miss_acts, action, unexpected,
+                                   **self._group_badges(st, direction))
         else:
             self.act_stack.rebuild(tpl.actions, set(), None, set(tpl.actions))
+
+    def _group_badges(self, st, direction: str | None) -> dict:
+        """M32：组视图角标参数——与 HUD 同口径（主件帧数；不一致/断档 → 红）。"""
+        counts: dict[str, int] = {}
+        danger: set[str] = set()
+        if direction:
+            for r in st.rows:
+                if r.direction != direction:
+                    continue
+                counts[r.action] = r.count
+                if r.has_issues:
+                    danger.add(r.action)
+        return {"counts": counts, "danger": danger}
+
+    def _dir_badges(self, st) -> dict:
+        """M32.1：组视图方向角标 = 该方向并集动作数；方向内有异常行 → 红。"""
+        acts_by_dir: dict[str, set[str]] = {}
+        danger: set[str] = set()
+        for r in st.rows:
+            acts_by_dir.setdefault(r.direction, set()).add(r.action)
+            if r.has_issues:
+                danger.add(r.direction)
+        return {"counts": {d: len(v) for d, v in acts_by_dir.items()},
+                "danger": danger}
 
     def current(self) -> tuple[str | None, str | None]:
         d = next((n for n, b in self.dir_stack._buttons.items() if b.isChecked()), None)
