@@ -15,7 +15,8 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QLabel, QScrollArea, QSizePolicy
 
 # 面板固定宽度（HTML 表格 width=100% 依此铺满）
-HUD_WIDTH = 320
+# M32.4：320 → 360（用户反馈：折行总把数字甩到第二行，加宽 + chip nowrap 一起治）
+HUD_WIDTH = 360
 
 _COLOR_LABEL = "#96A1AD"     # 灰色标签（方向·动作）
 _COLOR_TEXT = "#E8E4D9"      # 米白正文（帧数）
@@ -144,8 +145,11 @@ class HUDPanel(QScrollArea):
             else:
                 dc = _COLOR_LABEL
             n_d = sum(r.count for r in rows)
-            chips: list[str] = [f"<span style='color:{dc}; font-weight:700;'>{d}</span>"
-                                f"<span style='color:{_COLOR_DIM};'>-{n_d}帧</span>"]
+            # M32.4：每个 chip（含行首「方向-总帧数」）都 nowrap——折行只发生在
+            # chip 之间的「 · 」间隔点，不会把「动作 数字」拦腰断开甩数字到第二行
+            chips: list[str] = [f"<span style='white-space:nowrap;'>"
+                                f"<span style='color:{dc}; font-weight:700;'>{d}</span>"
+                                f"<span style='color:{_COLOR_DIM};'>-{n_d}帧</span></span>"]
             for r in rows:
                 cur = (r.direction == cur_dir and r.action == cur_act)
                 if cur:
@@ -154,11 +158,12 @@ class HUDPanel(QScrollArea):
                     c, weight = _COLOR_RED, ""
                 else:
                     c, weight = _COLOR_TEXT, ""
-                chip = (f"<span style='color:{c}; {weight}'>{r.action} "
+                chip = (f"<span style='white-space:nowrap;'>"
+                        f"<span style='color:{c}; {weight}'>{r.action} "
                         f"<span style='color:{_COLOR_DIM};'>{r.count}</span></span>")
                 if r.has_issues:
                     chip += self._render_chip_annot(r)
-                chips.append(chip)
+                chips.append(chip + "</span>")
             body.append(f"<div style='margin:1px 0;'>{' · '.join(chips)}</div>")
         n_dirs = len(dirs)
         n_acts = len({r.action for r in stats.rows})

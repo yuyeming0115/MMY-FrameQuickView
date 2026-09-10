@@ -64,6 +64,9 @@ try:
     assert re.search(r">[A-Za-z\u4e00-\u9fff]+</span><span[^>]*>-\d+帧</span>", exp), \
         "方向行应内联总帧数"
     assert hud._label.wordWrap(), "QLabel 应开 wordWrap 防裁切"
+    # M32.4：chip nowrap——折行不把「动作 数字」拦腰断开
+    assert "white-space:nowrap" in exp, "chip 应 nowrap 防数字孤行"
+    assert hud.width() == 360, "面板应加宽到 360"
     hud._set_expanded(False)
     assert "方向 ×" not in hud._label.text(), "移开应收起"
     print("[1] OK HUD 显示: 紧凑默认/悬停展开/收起 + 合计 + 不一致标记")
