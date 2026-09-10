@@ -5,7 +5,8 @@
 - 半透明深色卡片 + 富文本表格：金色标题、灰色标签、红色异常 ⚠，
   与全局 Modern Dark Flat 主题一致；字号 ≥ 14px（视力适配）。
 - 当前选中 (方向,动作) 的行金色高亮；断档 / 帧数不一致的行红字标注。
-- 行数多时内部滚动，高度不超过宿主 75%。
+- M32.2：展开视图一行一个方向（行内「动作 帧」流式排列），只显示帧数不显示
+  帧号范围；行数多时内部滚动，高度不超过宿主 75%。
 """
 from __future__ import annotations
 
@@ -112,19 +113,71 @@ class HUDPanel(QScrollArea):
         )
         if not self._expanded:
             return header + self._render_compact(stats)
+        return header + self._render_expanded(stats)
+
+    def _render_expanded(self, stats: HudStats) -> str:
+        """展开视图（M32.2）：一行一个方向，行内「动作 帧」流式排列。
+
+        用户反馈完整列表一行一组合太长（25 行遮挡画布），改为按方向归组后
+        25 行 → 方向数行（通常 5~6 行），方向内动作横向排布自动折行。
+        """
         cur_dir, cur_act = stats.current or (None, None)
-        rows_html: list[str] = []
+        dirs: list[str] = []
+        by_dir: dict[str, list[ComboStat]] = {}
         for r in stats.rows:
-            rows_html.append(self._render_row(r, r.direction == cur_dir and r.action == cur_act))
-        n_dirs = len({r.direction for r in stats.rows})
+            if r.direction not in by_dir:
+                by_dir[r.direction] = []
+                dirs.append(r.direction)
+            by_dir[r.direction].append(r)
+        body: list[str] = []
+        for d in dirs:
+            rows = by_dir[d]
+            d_issues = any(r.has_issues for r in rows)
+            if d == cur_dir:
+                dc = _COLOR_GOLD
+            elif d_issues:
+                dc = _COLOR_RED
+            else:
+                dc = _COLOR_LABEL
+            chips: list[str] = []
+            for r in rows:
+                cur = (r.direction == cur_dir and r.action == cur_act)
+                if cur:
+                    c, weight = _COLOR_GOLD, "font-weight:700; "
+                elif r.has_issues:
+                    c, weight = _COLOR_RED, ""
+                else:
+                    c, weight = _COLOR_TEXT, ""
+                chip = (f"<span style='color:{c}; {weight}'>{r.action} "
+                        f"<span style='color:{_COLOR_DIM};'>{r.count}</span></span>")
+                if r.has_issues:
+                    chip += self._render_chip_annot(r)
+                chips.append(chip)
+            n_d = sum(r.count for r in rows)
+            body.append(
+                "<tr>"
+                f"<td valign='top' style='color:{dc}; white-space:nowrap;"
+                f" padding:2px 10px 2px 0;'>{d}"
+                f"<div style='color:{_COLOR_DIM}; font-size:11px;'>{n_d}帧</div></td>"
+                f"<td style='padding:2px 0;'>{' · '.join(chips)}</td>"
+                "</tr>"
+            )
+        n_dirs = len(dirs)
         n_acts = len({r.action for r in stats.rows})
-        return (
-            header
-            + "<table width='100%' cellspacing='0' cellpadding='0'>"
-            + "".join(rows_html)
-            + self._render_total(stats, f"{stats.grand} 帧 · {n_dirs}方向 × {n_acts}动作")
-            + "</table>"
-        )
+        return ("<table width='100%' cellspacing='0' cellpadding='0'>"
+                + "".join(body)
+                + self._render_total(stats, f"{stats.grand} 帧 · {n_dirs}方向 × {n_acts}动作")
+                + "</table>")
+
+    def _render_chip_annot(self, r: ComboStat) -> str:
+        """异常 chip 的红字标注：断档帧号 / 不一致部件（截断到 2 条防折行爆炸）。"""
+        annots: list[str] = []
+        if r.gaps:
+            annots.append(f"缺帧{r.gaps[:2]}{'…' if len(r.gaps) > 2 else ''}")
+        annots.extend(r.mismatch[:2])
+        if not annots:
+            return "<span style='color:" + _COLOR_RED + ";'>⚠</span>"
+        return "<span style='color:" + _COLOR_RED + ";'>⚠" + "，".join(annots) + "</span>"
 
     def _render_compact(self, stats: HudStats) -> str:
         """紧凑模式：当前组合一行 + 合计一行。"""
@@ -152,11 +205,7 @@ class HUDPanel(QScrollArea):
 
     def _render_row(self, r: ComboStat, current: bool) -> str:
         label = f"{r.direction} · {r.action}" if not r.is_flat else f"{r.direction} · {r.action}"
-        if r.first is not None:
-            rng = (f"{r.first}–{r.last}" if r.is_flat
-                   else f"{r.first:04d}–{r.last:04d}")
-        else:
-            rng = ""
+        # M32.2：不再显示帧号范围（用户反馈），范围信息状态栏已有
         annots: list[str] = []
         if r.source:
             annots.append(f"←{r.source}")
@@ -170,8 +219,6 @@ class HUDPanel(QScrollArea):
         else:
             lc, tc = _COLOR_LABEL, _COLOR_TEXT
         val = f"{r.count} 帧"
-        if rng:
-            val += f" <span style='color:{_COLOR_DIM};'>{rng}</span>"
         if annots:
             val += f" <span style='color:{_COLOR_RED};'>⚠ {'，'.join(annots)}</span>"
         return (
