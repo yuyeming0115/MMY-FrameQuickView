@@ -106,8 +106,42 @@ class HUDPanel(QScrollArea):
         if stats is None:
             return
         self._label.setText(self._render(stats))
+        # M32.5：展开时宽度按内容自适应——每方向整行不硬拆，尽量消灭 2 行折行，
+        # 让总高度降到宿主 90% 上限内（不出滚动条）；紧凑模式回到默认宽
+        if self._expanded:
+            self._apply_expanded_width(stats)
+        else:
+            self.setFixedWidth(HUD_WIDTH)
         self._label.adjustSize()
         self.show()
+
+    def _apply_expanded_width(self, stats: HudStats) -> None:
+        """展开宽度 = 最长方向行的像素宽 + 边距，clamp 到 [HUD_WIDTH, 宿主 72%]。"""
+        fm = self._label.fontMetrics()
+        host = self.parentWidget()
+        cap = int(host.width() * 0.72) if host is not None else HUD_WIDTH * 2
+        cap = max(HUD_WIDTH, cap)
+        need = 0
+        for d, rows in self._grouped_rows(stats):
+            n_d = sum(r.count for r in rows)
+            text = f"{d}-{n_d}帧"
+            for r in rows:
+                text += f" · {r.action} {r.count}"
+                if r.has_issues:
+                    text += " ⚠"
+            need = max(need, fm.horizontalAdvance(text))
+        self.setFixedWidth(min(max(HUD_WIDTH, need + 28), cap))
+
+    def _grouped_rows(self, stats: HudStats) -> list[tuple[str, list[ComboStat]]]:
+        """按方向归组（保持模板序）：[(方向, [ComboStat...])...]。"""
+        dirs: list[str] = []
+        by_dir: dict[str, list[ComboStat]] = {}
+        for r in stats.rows:
+            if r.direction not in by_dir:
+                by_dir[r.direction] = []
+                dirs.append(r.direction)
+            by_dir[r.direction].append(r)
+        return [(d, by_dir[d]) for d in dirs]
 
     def _render(self, stats: HudStats) -> str:
         header = (
@@ -127,16 +161,8 @@ class HUDPanel(QScrollArea):
           QLabel 开 wordWrap 后自动折行，不再被右侧裁切
         """
         cur_dir, cur_act = stats.current or (None, None)
-        dirs: list[str] = []
-        by_dir: dict[str, list[ComboStat]] = {}
-        for r in stats.rows:
-            if r.direction not in by_dir:
-                by_dir[r.direction] = []
-                dirs.append(r.direction)
-            by_dir[r.direction].append(r)
         body: list[str] = []
-        for d in dirs:
-            rows = by_dir[d]
+        for d, rows in self._grouped_rows(stats):
             d_issues = any(r.has_issues for r in rows)
             if d == cur_dir:
                 dc = _COLOR_GOLD
@@ -165,7 +191,7 @@ class HUDPanel(QScrollArea):
                     chip += self._render_chip_annot(r)
                 chips.append(chip + "</span>")
             body.append(f"<div style='margin:1px 0;'>{' · '.join(chips)}</div>")
-        n_dirs = len(dirs)
+        n_dirs = len({r.direction for r in stats.rows})
         n_acts = len({r.action for r in stats.rows})
         return ("".join(body)
                 + f"<div style='margin-top:5px; color:{_COLOR_GOLD};'>"

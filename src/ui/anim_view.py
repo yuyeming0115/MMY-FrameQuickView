@@ -692,12 +692,12 @@ class AnimView(QFrame):
         self.hud_toggled.emit(visible)
 
     def _reposition_hud(self) -> None:
-        """锚定画布右下角；高度上限 = 宿主 75%，超出交内部滚动。"""
+        """锚定画布右下角；高度上限 = 宿主 90%（M32.5：75% 会让展开账目出滚动条）。"""
         host, hud = self._stack_host, self._hud
         if not hud.isVisible() or host.width() <= 0:
             return
         content_h = hud.widget().sizeHint().height() + 2 * hud.frameWidth() + 4
-        max_h = int(host.height() * 0.75)
+        max_h = int(host.height() * 0.9)
         h = max(60, min(content_h, max_h))
         hud.setFixedHeight(h)
         hud.move(host.width() - hud.width() - 12, host.height() - h - 10)
@@ -792,9 +792,11 @@ class AnimView(QFrame):
         tog.raise_()
 
     def eventFilter(self, obj, event) -> bool:
-        """stack_host 尺寸变化（splitter 拖动/窗口缩放）时同步 toggle 位置。"""
+        """stack_host 尺寸变化（splitter 拖动/窗口缩放）时同步 toggle/HUD 位置。"""
         if obj is self._stack_host and event.type() == QEvent.Type.Resize:
             self._reposition_toggles()
+            if self._hud.isVisible():
+                self._reposition_hud()
         return super().eventFilter(obj, event)
 
     def part_toggles_signal(self):

@@ -66,9 +66,11 @@ try:
     assert hud._label.wordWrap(), "QLabel 应开 wordWrap 防裁切"
     # M32.4：chip nowrap——折行不把「动作 数字」拦腰断开
     assert "white-space:nowrap" in exp, "chip 应 nowrap 防数字孤行"
-    assert hud.width() == 360, "面板应加宽到 360"
+    # M32.5：展开宽度自适应（≥360，按最长方向行撑开）
+    assert hud.width() >= 360, f"展开宽度应自适应 ≥360，实际 {hud.width()}"
     hud._set_expanded(False)
     assert "方向 ×" not in hud._label.text(), "移开应收起"
+    assert hud.width() == 360, "收起后应回到默认宽 360"
     print("[1] OK HUD 显示: 紧凑默认/悬停展开/收起 + 合计 + 不一致标记")
 
     # 动作按钮角标：当前方向下 idle 行动按钮应有角标
