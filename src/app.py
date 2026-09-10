@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 
 from .core.namemap import NameMap, discover_map_file
 from .core.scanner import IdGroup, PartData, ScanResult, scan_root
+from .core.stats import build_hud_stats
 from .core.template import Template, load_templates
 from .ui.anim_view import AnimView
 from .ui.button_matrix import ButtonMatrix
@@ -111,6 +112,9 @@ class MainWindow(QMainWindow):
             self.matrix.set_template(self._tpl)
             self.anim_view.set_available_dirs(set(self._tpl.directions))
         self.statusBar().showMessage("就绪 · 拖入文件夹开始")
+        # 恢复 HUD 信息面板开关（M32，默认开）
+        self.anim_view.set_hud_visible(
+            bool(self._settings.value("hud/visible", True, type=bool)))
         # 恢复 A区「原图/自适应」模式
         saved_fit = self._settings.value("grid/fit_mode", False)
         if saved_fit is not None and bool(saved_fit) != self.grid_view._mode_btn.isChecked():
@@ -203,6 +207,8 @@ class MainWindow(QMainWindow):
         self.anim_view.fx_offset_changed.connect(self._on_fx_offset_changed)
         self.anim_view.fx_dressed_signal().connect(self._on_fx_dressed)  # M26 穿戴特效
         self.anim_view.wing_dressed_signal().connect(self._on_wing_dressed)  # M28 穿戴翅膀
+        # M32：HUD 信息面板开关持久化
+        self.anim_view.hud_toggled.connect(self._on_hud_toggled)
         panes.addWidget(self.grid_view)
         panes.addWidget(self.anim_view)
         panes.setStretchFactor(0, 5)
@@ -715,6 +721,36 @@ class MainWindow(QMainWindow):
         self._show_grid()
         self._show_anim()
         self._refresh_status()
+        self._update_hud()
+
+    # ---------------- M32：HUD 信息面板 ----------------
+    def _update_hud(self) -> None:
+        """HUD 帧数账目：随选择/方向/动作/显隐变化全量刷新（纯内存，零 IO）。"""
+        if self._part is None and self._group is None:
+            self.anim_view.update_hud(None)
+            return
+        direction, action = self.matrix.current()
+        if self._part is not None:
+            stats = build_hud_stats(self._part, self._tpl)
+            cn = self._namemap.lookup(self._part.name, self._part.res_id) \
+                if self._namemap is not None else None
+            stats.title = cn or self._part.name
+            stats.subtitle = f"ID {self._part.res_id} · {self._part.part or '整体'}"
+        else:
+            stats = build_hud_stats(self._group, self._tpl)
+            gname = self._group.display_name or self._group.res_id
+            cn = self._namemap.lookup(gname, self._group.res_id) \
+                if self._namemap is not None else None
+            stats.title = cn or gname
+            n = len(self._group.parts)
+            stats.subtitle = (f"套装 · {n}件" if self._group.is_outfit
+                              else f"ID {self._group.res_id} · {n}部件")
+        stats.current = (direction, action)
+        self.anim_view.update_hud(stats)
+
+    def _on_hud_toggled(self, visible: bool) -> None:
+        self._settings.setValue("hud/visible", visible)
+        self._settings.sync()
 
     def _on_grid_frame_clicked(self, idx: int) -> None:
         """A 区点击某帧 → B 区跳转并暂停，方便逐帧对照。"""
