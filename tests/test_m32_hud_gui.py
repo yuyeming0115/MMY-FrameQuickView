@@ -51,14 +51,24 @@ try:
     # 标题随匹配表可能为中文名，这里只断言结构性内容
     assert "套装 · 2件" in html, html[:200]
     assert "合计" in html and "8 帧" in html
-    assert "weapon 7帧" in html, "应含帧数不一致标记"
-    print("[1] OK HUD 显示: 标题/套装/合计/不一致标记")
+    assert "weapon 7帧" in html or "⚠" in html, "应含帧数不一致标记"
+    # M32.1 紧凑模式：默认不渲染完整账目表（完整合计带「N方向 × M动作」）
+    assert "方向 ×" not in html, "默认应为紧凑模式"
+    hud._set_expanded(True)
+    assert "方向 ×" in hud._label.text(), "悬停应展开完整账目"
+    hud._set_expanded(False)
+    assert "方向 ×" not in hud._label.text(), "移开应收起"
+    print("[1] OK HUD 显示: 紧凑默认/悬停展开/收起 + 合计 + 不一致标记")
 
     # 动作按钮角标：当前方向下 idle 行动按钮应有角标
     btn = w.matrix.act_stack._buttons.get("idle")
     assert btn is not None and btn._badge.isVisible(), "idle 按钮应有帧数角标"
     assert btn._badge.text() == "8", btn._badge.text()
-    print("[2] OK 动作按钮角标: idle → 8（主件口径）")
+    # M32.1 方向按钮角标：E 方向 = 该方向动作数 1
+    dbtn = w.matrix.dir_stack._buttons.get("E")
+    assert dbtn is not None and dbtn._badge.isVisible(), "E 方向按钮应有动作数角标"
+    assert dbtn._badge.text() == "1", dbtn._badge.text()
+    print("[2] OK 按钮角标: 动作 idle→8（主件口径），方向 E→1（动作数）")
 
     # 切到 weapon 视角（组内部件仍是组视图）→ 改选散件视图验证单部件
     # 单部件：拖入 body 目录本身

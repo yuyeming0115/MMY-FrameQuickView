@@ -540,8 +540,10 @@ class AnimView(QFrame):
         self._toggles.hide()
         stack_host.installEventFilter(self)
 
-        # M32：HUD 信息面板（帧数账目），同模式悬浮于右下角
+        # M32：HUD 信息面板（帧数账目），同模式悬浮于右下角；
+        # M32.1 紧凑/悬停展开高度变化 → 重新锚定右下角
         self._hud = HUDPanel(stack_host)
+        self._hud.size_changed.connect(self._reposition_hud)
         self._hud.hide()
 
         outer.addWidget(stack_host, 1)

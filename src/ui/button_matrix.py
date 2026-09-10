@@ -232,11 +232,14 @@ class ButtonMatrix(QFrame):
             avail = part.available_directions()
             if direction not in avail:
                 direction = avail[0] if avail else None
-            self.dir_stack.rebuild(avail, set(), direction)
+            # M32.1：方向角标 = 该虚拟方向下的序列数
+            dir_counts = {d: len(part.available_actions(d)) for d in avail}
+            self.dir_stack.rebuild(avail, set(), direction, None, counts=dir_counts)
             acts = part.available_actions(direction) if direction else []
             if action not in acts:
                 action = acts[0] if acts else None
-            self.act_stack.rebuild(acts, set(), action)
+            self.act_stack.rebuild(acts, set(), action, None,
+                                   **self._part_badges(part, direction))
             return
         miss_dirs = set(part.missing_directions)
         if direction is None:
@@ -246,7 +249,15 @@ class ButtonMatrix(QFrame):
         elif direction in miss_dirs:
             avail = part.available_directions()
             direction = avail[0] if avail else None
-        self.dir_stack.rebuild(tpl.directions, miss_dirs, direction)
+        # M32.1：方向角标 = 该方向下的动作数；方向内有断档 → 红角标
+        dir_counts, dir_danger = {}, set()
+        for d in part.available_directions():
+            ads = [part.action_data(d, a) for a in part.available_actions(d)]
+            dir_counts[d] = len([ad for ad in ads if ad is not None])
+            if any(ad is not None and ad.gaps for ad in ads):
+                dir_danger.add(d)
+        self.dir_stack.rebuild(tpl.directions, miss_dirs, direction, None,
+                               counts=dir_counts, danger=dir_danger)
 
         miss_acts: set[str] = set()
         if direction:
@@ -300,7 +311,9 @@ class ButtonMatrix(QFrame):
                     acts_by_dir.setdefault(d, set()).update(p.available_actions(d))
             if direction not in avail_d:
                 direction = sorted(avail_d)[0] if avail_d else None
-            self.dir_stack.rebuild(sorted(avail_d), set(), direction)
+            # M32.1：方向角标 = 该虚拟方向下的序列数
+            self.dir_stack.rebuild(sorted(avail_d), set(), direction, None,
+                                   counts={d: len(v) for d, v in acts_by_dir.items()})
             acts = sorted(acts_by_dir.get(direction, set())) if direction else []
             if action not in acts:
                 action = acts[0] if acts else None
@@ -319,7 +332,9 @@ class ButtonMatrix(QFrame):
             direction = DEFAULT_DIRECTION if DEFAULT_DIRECTION in avail_d else (sorted(avail_d)[0] if avail_d else None)
         elif direction in miss_dirs:
             direction = sorted(avail_d)[0] if avail_d else None
-        self.dir_stack.rebuild(tpl.directions, miss_dirs, direction)
+        # M32.1：方向角标 = 该方向下的动作数（组内并集）；方向内有异常行 → 红角标
+        self.dir_stack.rebuild(tpl.directions, miss_dirs, direction, None,
+                               **self._dir_badges(st))
 
         if direction:
             # 组级三态：以「类型 × 方向」基准对照组内并集拥有（见 scanner._group_parts）
@@ -351,6 +366,17 @@ class ButtonMatrix(QFrame):
                 if r.has_issues:
                     danger.add(r.action)
         return {"counts": counts, "danger": danger}
+
+    def _dir_badges(self, st) -> dict:
+        """M32.1：组视图方向角标 = 该方向并集动作数；方向内有异常行 → 红。"""
+        acts_by_dir: dict[str, set[str]] = {}
+        danger: set[str] = set()
+        for r in st.rows:
+            acts_by_dir.setdefault(r.direction, set()).add(r.action)
+            if r.has_issues:
+                danger.add(r.direction)
+        return {"counts": {d: len(v) for d, v in acts_by_dir.items()},
+                "danger": danger}
 
     def current(self) -> tuple[str | None, str | None]:
         d = next((n for n, b in self.dir_stack._buttons.items() if b.isChecked()), None)

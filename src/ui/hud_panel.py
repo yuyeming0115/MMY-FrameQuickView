@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from ..core.stats import ComboStat, HudStats
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QLabel, QScrollArea, QSizePolicy
 
 # 面板固定宽度（HTML 表格 width=100% 依此铺满）
@@ -24,10 +24,20 @@ _COLOR_RED = "#E24B4A"       # 红色异常（断档 / 不一致）
 
 
 class HUDPanel(QScrollArea):
-    """帧数账目浮层：set_stats(HudStats) 全量刷新，None 隐藏。"""
+    """帧数账目浮层：set_stats(HudStats) 全量刷新，None 隐藏。
+
+    M32.1 紧凑模式（用户反馈：完整面板过高遮挡角色）：
+    - 默认只显示 标题 + 当前(方向·动作) + 合计（约 3 行）
+    - 鼠标悬停自动展开完整账目表格，移开自动收起
+    - 高度变化发 size_changed 信号，宿主（anim_view）据此重新锚定右下角
+    """
+
+    size_changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._stats: HudStats | None = None
+        self._expanded = False
         self.setFixedWidth(HUD_WIDTH)
         self.setFrameShape(QScrollArea.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -58,21 +68,50 @@ class HUDPanel(QScrollArea):
         self.setWidgetResizable(True)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
 
+    # ---------------- 悬停展开 / 收起（M32.1） ----------------
+    def enterEvent(self, event) -> None:
+        self._set_expanded(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._set_expanded(False)
+        super().leaveEvent(event)
+
+    def _set_expanded(self, expanded: bool) -> None:
+        if self._expanded == expanded:
+            return
+        self._expanded = expanded
+        if self._stats is not None:
+            self._refresh()
+            self.size_changed.emit()
+
     # ---------------- 内容渲染 ----------------
     def set_stats(self, stats: HudStats | None) -> None:
         """全量刷新；stats 为 None 或无行时隐藏面板。"""
+        self._stats = stats
         if stats is None or not stats.rows:
             self.hide()
+            return
+        self._refresh()
+        tip_bits = [f"{k} {v}帧" for k, v in stats.totals.items()]
+        self.setToolTip("鼠标悬停展开完整账目\n各部件帧数小计：\n" + "\n".join(tip_bits)
+                        if len(stats.totals) > 1 else "鼠标悬停展开完整账目")
+
+    def _refresh(self) -> None:
+        stats = self._stats
+        if stats is None:
             return
         self._label.setText(self._render(stats))
         self._label.adjustSize()
         self.show()
-        cur_dir, cur_act = stats.current or (None, None)
-        tip_bits = [f"{k} {v}帧" for k, v in stats.totals.items()]
-        self.setToolTip(f"各部件帧数小计：\n" + "\n".join(tip_bits)
-                        if len(stats.totals) > 1 else "")
 
     def _render(self, stats: HudStats) -> str:
+        header = (
+            f"<div style='color:{_COLOR_GOLD}; font-size:15px;'>{stats.title}</div>"
+            f"<div style='color:{_COLOR_LABEL}; font-size:12px; margin:0 0 4px 0;'>{stats.subtitle}</div>"
+        )
+        if not self._expanded:
+            return header + self._render_compact(stats)
         cur_dir, cur_act = stats.current or (None, None)
         rows_html: list[str] = []
         for r in stats.rows:
@@ -80,15 +119,35 @@ class HUDPanel(QScrollArea):
         n_dirs = len({r.direction for r in stats.rows})
         n_acts = len({r.action for r in stats.rows})
         return (
-            f"<div style='color:{_COLOR_GOLD}; font-size:15px;'>{stats.title}</div>"
-            f"<div style='color:{_COLOR_LABEL}; font-size:12px; margin:0 0 4px 0;'>{stats.subtitle}</div>"
-            "<table width='100%' cellspacing='0' cellpadding='0'>"
-            + "".join(rows_html) +
+            header
+            + "<table width='100%' cellspacing='0' cellpadding='0'>"
+            + "".join(rows_html)
+            + self._render_total(stats, f"{stats.grand} 帧 · {n_dirs}方向 × {n_acts}动作")
+            + "</table>"
+        )
+
+    def _render_compact(self, stats: HudStats) -> str:
+        """紧凑模式：当前组合一行 + 合计一行。"""
+        cur_dir, cur_act = stats.current or (None, None)
+        row = next((r for r in stats.rows
+                    if r.direction == cur_dir and r.action == cur_act), None)
+        n_issues = sum(1 for r in stats.rows if r.has_issues)
+        total = f"{stats.grand} 帧"
+        if n_issues:
+            total += f" <span style='color:{_COLOR_RED};'>⚠{n_issues}</span>"
+        if row is None:
+            return "<table width='100%' cellspacing='0' cellpadding='0'>" \
+                + self._render_total(stats, total) + "</table>"
+        body = self._render_row(row, True)
+        return "<table width='100%' cellspacing='0' cellpadding='0'>" \
+            + body + self._render_total(stats, total) + "</table>"
+
+    def _render_total(self, stats: HudStats, val: str) -> str:
+        return (
             "<tr>"
             f"<td style='padding-top:5px; color:{_COLOR_GOLD};'>合计</td>"
-            f"<td align='right' style='padding-top:5px; color:{_COLOR_GOLD};'>"
-            f"{stats.grand} 帧 · {n_dirs}方向 × {n_acts}动作</td>"
-            "</tr></table>"
+            f"<td align='right' style='padding-top:5px; color:{_COLOR_GOLD};'>{val}</td>"
+            "</tr>"
         )
 
     def _render_row(self, r: ComboStat, current: bool) -> str:
