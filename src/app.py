@@ -575,7 +575,10 @@ class MainWindow(QMainWindow):
         self._part = part
         self._group = None
         self.anim_view.hide_part_toggles()
-        self._update_matrix(None, None)
+        # M33：切换部件保持当前方向/动作（直到用户主动改变）；
+        # 新部件缺失该组合时由 show_part 兜底回退默认
+        direction, action = self.matrix.current()
+        self._update_matrix(direction, action)
         self._after_matrix_change()
 
     def _on_group_selected(self, key: str) -> None:
@@ -601,7 +604,10 @@ class MainWindow(QMainWindow):
             [(p.name, self._wing_display_name(p)) for p in self._wing_library],
             self._dressed_wings.get(grp.key, ""),
         )
-        self._update_matrix(None, None)
+        # M33：切换组保持当前方向/动作（直到用户主动改变）；
+        # 新组缺失该组合时由 show_group 兜底回退默认
+        direction, action = self.matrix.current()
+        self._update_matrix(direction, action)
         self._after_matrix_change()
 
     def _toggle_key(self, p, grp) -> str:
