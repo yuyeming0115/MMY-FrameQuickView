@@ -609,6 +609,7 @@ class AnimView(QFrame):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._advance)
 
+        self._canvas_align = False                  # M34 固定画布对齐（随 show_sequence 传入）
         self._worker: DecodeWorker | None = None
         self._frames: list[QPixmap] = []
         self._labels: list[str] = []
@@ -827,11 +828,15 @@ class AnimView(QFrame):
         flat_mask: list[bool] | None = None,
         fx_offsets: dict[int, tuple[int, int]] | None = None,
         start_idx: int = 0,
+        canvas_align: bool = False,
     ) -> None:
         """layers[0] 为最底层；多层即同 ID 叠层合成。
 
         切换体验（M6）：**延迟清空 + 整体替换**——保留旧动画继续播放直到
         新序列全部解码完成，避免切换瞬间画布闪黑。
+
+        canvas_align（M34）：固定画布对齐——窗口=原始渲染画布、普通层不平移，
+        跨视图（有无武器/不同部件组合）角色位置纹丝不动。
         """
         self._stop_worker()
         if not layers or all(len(layer) == 0 for layer in layers):
@@ -851,8 +856,10 @@ class AnimView(QFrame):
         # 存储特效层信息供键盘微调使用
         self._flat_mask = flat_mask or []
         self._fx_offsets = fx_offsets or {}
+        self._canvas_align = canvas_align           # M34：标题文案用
         # part_keys 需要由调用方通过 set_fx_part_keys 设置（app.py 在调用 show_sequence 后设置）
-        self._worker = DecodeWorker(layers, flat_mask=flat_mask, fx_offsets=fx_offsets)
+        self._worker = DecodeWorker(layers, flat_mask=flat_mask, fx_offsets=fx_offsets,
+                                    canvas_align=canvas_align)
         self._worker.frame_ready.connect(self._on_frame)
         self._worker.finished.connect(self._on_done)
         self._worker.start()
@@ -892,7 +899,8 @@ class AnimView(QFrame):
         self._labels = self._pending_labels
         self._pending_frames = []
         self._pending_labels = []
-        self._title.setText(f"B · GIF 动画预览（{total} 帧 · 并集 bbox · 防抖动）")
+        align = "画布对齐" if self._canvas_align else "并集 bbox"
+        self._title.setText(f"B · GIF 动画预览（{total} 帧 · {align} · 防抖动）")
         if not self._frames:
             return
         resume_paused = self._resume_paused

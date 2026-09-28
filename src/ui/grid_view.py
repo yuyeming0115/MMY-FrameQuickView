@@ -262,6 +262,7 @@ class GridView(QFrame):
         self._scroll.setWidget(self._viewport)
         layout.addWidget(self._scroll, 1)
 
+        self._canvas_align = False                  # M34 固定画布对齐（随 show_sequence 传入）
         self._worker: DecodeWorker | None = None
         self._cells: list[_FrameCell] = []
         self._pending: list[tuple[int, object, str]] = []  # (idx, PIL.Image, label) 缓存
@@ -274,11 +275,15 @@ class GridView(QFrame):
         layers: list[list[Path]],
         flat_mask: list[bool] | None = None,
         fx_offsets: dict[int, tuple[int, int]] | None = None,
+        canvas_align: bool = False,
     ) -> None:
         """layers[0] 为最底层；单层即普通序列，多层即同 ID 叠层合成。
 
         切换体验（M6）：**延迟清空 + 整体替换**——保留旧画面直到新序列
         全部解码完成，避免「先清空再逐帧生长」的闪烁感。期间标题显示解码中。
+
+        canvas_align（M34）：固定画布对齐——窗口=原始渲染画布、普通层不平移，
+        跨视图（有无武器/不同部件组合）角色位置纹丝不动。
         """
         self._stop_worker()
         if not layers or all(len(layer) == 0 for layer in layers):
@@ -287,7 +292,9 @@ class GridView(QFrame):
             return
         self._title.setText("A · 序列帧网格 · 解码中…")
         self._pending = []
-        self._worker = DecodeWorker(layers, flat_mask=flat_mask, fx_offsets=fx_offsets)
+        self._canvas_align = canvas_align           # M34：标题文案用
+        self._worker = DecodeWorker(layers, flat_mask=flat_mask, fx_offsets=fx_offsets,
+                                    canvas_align=canvas_align)
         self._worker.frame_ready.connect(self._on_frame)
         self._worker.finished.connect(self._on_done)
         self._worker.start()
@@ -335,8 +342,13 @@ class GridView(QFrame):
         self._build_cells()
         pixmaps.clear()
         self._pending = []
+        self._title.setText(f"A · 序列帧网格（{total} 帧 · {self._mode_text()}）")
+
+    def _mode_text(self) -> str:
+        """标题模式段：缩放模式 + 对齐模式（M34）。"""
         mode = "自适应一屏全显" if self._mode_btn.isChecked() else "100% 原尺寸"
-        self._title.setText(f"A · 序列帧网格（{total} 帧 · {mode} · 并集 bbox）")
+        align = "画布对齐" if self._canvas_align else "并集 bbox"
+        return f"{mode} · {align}"
 
     def _build_cells(self) -> None:
         """根据当前模式（原图/自适应）构建所有 cell。"""
@@ -417,9 +429,8 @@ class GridView(QFrame):
         self._mode_btn.setText("原图" if checked else "自适应")
         if self._loaded:
             self._build_cells()
-            total = len(self._loaded)
-            mode = "自适应一屏全显" if checked else "100% 原尺寸"
-            self._title.setText(f"A · 序列帧网格（{total} 帧 · {mode} · 并集 bbox）")
+            self._title.setText(
+                f"A · 序列帧网格（{len(self._loaded)} 帧 · {self._mode_text()}）")
 
     def resizeEvent(self, event) -> None:
         """视口宽度变化时，自适应模式重算布局。"""

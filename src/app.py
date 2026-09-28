@@ -93,6 +93,8 @@ class MainWindow(QMainWindow):
         self._fx_layer_indices: set[int] = set()
         # fills 警告检测开关：NPC/翅膀/主角/坐骑等无 fills 部件的资源可关闭降噪（QSettings 记忆）
         self._fills_check = bool(self._settings.value("checks/fills", True, type=bool))
+        # M34：固定画布对齐模式（跨视图角色位置不漂移；QSettings 记忆）
+        self._canvas_align = bool(self._settings.value("display/canvas_align", False, type=bool))
         # M30：快捷文件夹（收藏 + 最近拖入），QSettings 持久化
         self._quick_favs: list[str] = []
         self._quick_recents: list[str] = []
@@ -169,6 +171,25 @@ class MainWindow(QMainWindow):
         )
         self.fills_btn.toggled.connect(self._on_fills_check_toggled)
         top.addWidget(self.fills_btn)
+        # M34：固定画布对齐——A/B 区按原始渲染画布显示、角色不平移，
+        # 「有无武器/不同部件组合」跨视图比对时角色位置纹丝不动
+        self.canvas_btn = QPushButton("📐 画布对齐")
+        self.canvas_btn.setCheckable(True)
+        self.canvas_btn.setChecked(self._canvas_align)
+        self.canvas_btn.setToolTip(
+            "固定画布对齐模式：\n"
+            "开启 = A/B 区按原始渲染画布显示，角色不随内容（如武器）平移，\n"
+            "切换部件/套装时角色位置纹丝不动，便于跨视图比对对齐\n"
+            "关闭 = 默认「并集 bbox」模式（内容自适应裁剪，画面更紧凑）"
+        )
+        # M34.1：开启态金底深字（与 A 区「自适应」选中样式同规格）——
+        # 深色主题下默认 checked 无任何视觉差异，用户反馈两态不易分辨
+        self.canvas_btn.setStyleSheet(
+            "QPushButton:checked { color: #1E2023; background: #D4AF37;"
+            " border-color: #D4AF37; font-weight: 600; }"
+        )
+        self.canvas_btn.toggled.connect(self._on_canvas_align_toggled)
+        top.addWidget(self.canvas_btn)
         root.addLayout(top)
 
         # 主体：左栏部件列表 | 右侧（按钮矩阵 + A/B 双区）
@@ -703,6 +724,25 @@ class MainWindow(QMainWindow):
         self.part_list.set_fills_check(checked)
         self._refresh_status()
 
+    def _on_canvas_align_toggled(self, checked: bool) -> None:
+        """M34：画布对齐开关——重算 A/B 区显示（QSettings 记忆）。
+
+        M34.1：文案 + 金底高亮 + 状态栏三重反馈，两态一眼可辨。
+        注意 setChecked() 会触发 toggled：启动恢复选中态时本回调先于
+        「就绪」状态栏执行，随后被覆盖，无副作用。
+        """
+        self._canvas_align = checked
+        self._settings.setValue("display/canvas_align", checked)
+        self._settings.sync()
+        self.canvas_btn.setText("✓ 画布对齐" if checked else "📐 画布对齐")
+        self.statusBar().showMessage(
+            "📐 画布对齐：开——角色跨视图位置固定不动（比对武器/部件组合）"
+            if checked else
+            "📐 画布对齐：关——恢复内容并集自适应裁剪", 4000)
+        if self._part is not None or self._group is not None:
+            self._show_grid()
+            self._show_anim()
+
     def _on_direction_selected(self, direction: str) -> None:
         # 切换方向时保持当前动作（该动作在新方向缺失时由 show_part/show_group 兜底）
         _, action = self.matrix.current()
@@ -995,7 +1035,8 @@ class MainWindow(QMainWindow):
         if self._group is None and self._part is None:
             return
         layers, flat_mask, fx_offsets, _keys = self._layers_for_current()
-        self.grid_view.show_sequence(layers, flat_mask, fx_offsets)
+        self.grid_view.show_sequence(layers, flat_mask, fx_offsets,
+                                     canvas_align=self._canvas_align)
 
     def _show_anim(self) -> None:
         """B 区同步加载当前组合的动画。"""
@@ -1006,7 +1047,8 @@ class MainWindow(QMainWindow):
         self.anim_view.set_fx_part_keys(part_keys)
         # M28：告知画布哪些层是真特效（Ctrl+方向键微调目标），穿戴翅膀会被排除
         self.anim_view.set_fx_layer_indices(self._fx_layer_indices)
-        self.anim_view.show_sequence(layers, flat_mask, fx_offsets)
+        self.anim_view.show_sequence(layers, flat_mask, fx_offsets,
+                                     canvas_align=self._canvas_align)
 
     def _refresh_status(self) -> None:
         """状态栏：帧数 / 帧号连续性 / 缺漏 / 配套摘要。"""
