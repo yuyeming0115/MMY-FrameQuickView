@@ -16,11 +16,21 @@ from PIL import Image
 BBox = tuple[int, int, int, int]  # (left, top, right, bottom)，PIL crop 语义
 
 
+def frame_info(path: Path) -> tuple[BBox | None, tuple[int, int]]:
+    """单帧 alpha 有效像素包围盒 + 原始画布尺寸（一次解码同时返回）。
+
+    M34 固定画布对齐模式需要画布尺寸；与 frame_bbox 共用一次解码，
+    避免调用方（DecodeWorker 双缓存）重复打开文件。
+    """
+    with Image.open(path) as im:
+        size = (im.width, im.height)
+        rgba = np.asarray(im.convert("RGBA"))
+    return array_bbox(rgba), size
+
+
 def frame_bbox(path: Path) -> BBox | None:
     """单帧 alpha 有效像素包围盒；全透明返回 None。"""
-    with Image.open(path) as im:
-        rgba = np.asarray(im.convert("RGBA"))
-    return array_bbox(rgba)
+    return frame_info(path)[0]
 
 
 def array_bbox(rgba: np.ndarray) -> BBox | None:
