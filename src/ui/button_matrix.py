@@ -248,12 +248,13 @@ class ButtonMatrix(QFrame):
                                    **self._part_badges(part, direction))
             return
         miss_dirs = set(part.missing_directions)
+        avail = part.available_directions()
         if direction is None:
             # 首次进入：优先默认方向 SE（若部件拥有），否则取第一个可用方向
-            avail = part.available_directions()
             direction = DEFAULT_DIRECTION if DEFAULT_DIRECTION in avail else (avail[0] if avail else None)
-        elif direction in miss_dirs:
-            avail = part.available_directions()
+        elif direction not in avail:
+            # M33：保持的方向在新部件不可用（缺失/虚拟方向）→ 回退第一个可用，
+            # 不能落在一个无 checked 的矩阵上（B 区将无资源可播）
             direction = avail[0] if avail else None
         # M32.1：方向角标 = 该方向下的动作数；方向内有断档 → 红角标
         dir_counts, dir_danger = {}, set()
@@ -274,7 +275,10 @@ class ButtonMatrix(QFrame):
             present = set(part.available_actions(direction))
             miss_acts = expected - present          # 约定要有却没有 → 红
             unexpected = set(tpl.actions) - expected  # 本类型不需要 → 灰
-            if action is None or action in miss_acts:
+            # M33：保持的动作在新方向不可用（缺失或本类型不适用）→ 回退默认；
+            # 只判 miss_acts 会漏掉 unexpected（如把角色的 run 带进坐骑），
+            # 结果选中一个灰显且无资源的动作
+            if action is None or action not in present:
                 action = pick_default_action(
                     eff_type, sorted(expected & present), sorted(present))
         else:
@@ -337,7 +341,8 @@ class ButtonMatrix(QFrame):
         if direction is None:
             # 首次进入：优先默认方向 SE（若组拥有），否则取第一个可用方向（字母序）
             direction = DEFAULT_DIRECTION if DEFAULT_DIRECTION in avail_d else (sorted(avail_d)[0] if avail_d else None)
-        elif direction in miss_dirs:
+        elif direction not in avail_d:
+            # M33：保持的方向在新组不可用（缺失/虚拟方向）→ 回退第一个可用
             direction = sorted(avail_d)[0] if avail_d else None
         # M32.1：方向角标 = 该方向下的动作数（组内并集）；方向内有异常行 → 红角标
         self.dir_stack.rebuild(tpl.directions, miss_dirs, direction, None,
@@ -353,7 +358,8 @@ class ButtonMatrix(QFrame):
                 owned_a_dir |= set(p.available_actions(direction))
             miss_acts = set(group.missing_actions.get(direction, [])) or (expected - owned_a_dir)
             unexpected = set(tpl.actions) - expected
-            if action is None or action in miss_acts:
+            # M33：保持的动作在新方向不可用（缺失或本类型不适用）→ 回退默认
+            if action is None or action not in owned_a_dir:
                 action = pick_default_action(
                     eff_type, sorted(expected & owned_a_dir), sorted(owned_a_dir))
             self.act_stack.rebuild(tpl.actions, miss_acts, action, unexpected,
