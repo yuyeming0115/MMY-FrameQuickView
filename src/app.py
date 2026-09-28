@@ -182,6 +182,12 @@ class MainWindow(QMainWindow):
             "切换部件/套装时角色位置纹丝不动，便于跨视图比对对齐\n"
             "关闭 = 默认「并集 bbox」模式（内容自适应裁剪，画面更紧凑）"
         )
+        # M34.1：开启态金底深字（与 A 区「自适应」选中样式同规格）——
+        # 深色主题下默认 checked 无任何视觉差异，用户反馈两态不易分辨
+        self.canvas_btn.setStyleSheet(
+            "QPushButton:checked { color: #1E2023; background: #D4AF37;"
+            " border-color: #D4AF37; font-weight: 600; }"
+        )
         self.canvas_btn.toggled.connect(self._on_canvas_align_toggled)
         top.addWidget(self.canvas_btn)
         root.addLayout(top)
@@ -719,10 +725,20 @@ class MainWindow(QMainWindow):
         self._refresh_status()
 
     def _on_canvas_align_toggled(self, checked: bool) -> None:
-        """M34：画布对齐开关——重算 A/B 区显示（QSettings 记忆）。"""
+        """M34：画布对齐开关——重算 A/B 区显示（QSettings 记忆）。
+
+        M34.1：文案 + 金底高亮 + 状态栏三重反馈，两态一眼可辨。
+        注意 setChecked() 会触发 toggled：启动恢复选中态时本回调先于
+        「就绪」状态栏执行，随后被覆盖，无副作用。
+        """
         self._canvas_align = checked
         self._settings.setValue("display/canvas_align", checked)
         self._settings.sync()
+        self.canvas_btn.setText("✓ 画布对齐" if checked else "📐 画布对齐")
+        self.statusBar().showMessage(
+            "📐 画布对齐：开——角色跨视图位置固定不动（比对武器/部件组合）"
+            if checked else
+            "📐 画布对齐：关——恢复内容并集自适应裁剪", 4000)
         if self._part is not None or self._group is not None:
             self._show_grid()
             self._show_anim()
