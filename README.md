@@ -32,6 +32,10 @@ C:\Users\EDY\.workbuddy\binaries\python\versions\3.13.12\python.exe -m venv .ven
 ## 运行
 
 ```bash
+# 模块方式运行（推荐）
+.venv/Scripts/python.exe -m src.main
+
+# 或直接指定入口文件（等价）
 .venv/Scripts/python.exe src/main.py
 ```
 
