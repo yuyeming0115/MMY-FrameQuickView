@@ -108,6 +108,10 @@ class MainWindow(QMainWindow):
         self._wing_library: list[PartData] = []
         self._wing_by_key: dict[str, PartData] = {}
         self._dressed_wings: dict[str, str] = self._load_dressed_wings()
+        # M38：跨 ID 穿戴（时装/头发/武器），按当前组 key 记忆（QSettings）
+        self._dressed_body: dict[str, str] = self._load_dressed_look("body")
+        self._dressed_hair: dict[str, str] = self._load_dressed_look("hair")
+        self._dressed_weapon: dict[str, str] = self._load_dressed_look("weapon")
         # M28：真正的特效层下标（穿戴的翅膀也算 flat 层，但不需要微调 → 排除）
         self._fx_layer_indices: set[int] = set()
         # fills 警告检测开关（M37 起默认关：BOSS/主角等无 fills 部件的资源满屏 🟠 降噪；
@@ -254,6 +258,7 @@ class MainWindow(QMainWindow):
         self.anim_view.fx_offset_changed.connect(self._on_fx_offset_changed)
         self.anim_view.fx_dressed_signal().connect(self._on_fx_dressed)  # M26 穿戴特效
         self.anim_view.wing_dressed_signal().connect(self._on_wing_dressed)  # M28 穿戴翅膀
+        self.anim_view.look_dressed_signal().connect(self._on_look_dressed)  # M38 穿戴时装/头发/武器
         # M32：HUD 信息面板开关持久化
         self.anim_view.hud_toggled.connect(self._on_hud_toggled)
         # M36.2：显示层面板开关持久化
@@ -656,6 +661,12 @@ class MainWindow(QMainWindow):
             [(p.name, self._wing_display_name(p)) for p in self._wing_library],
             self._dressed_wings.get(grp.key, ""),
         )
+        # M38：穿戴时装/头发/武器——当前显示（含形象组合）缺哪类才提供哪类的下拉
+        have = {p.part for p in self._display_parts(grp)}
+        for slot in self._LOOK_SLOTS:
+            store = getattr(self, f"_dressed_{slot}")
+            items = [] if slot in have else self._look_library(slot)
+            getattr(self.anim_view, f"set_{slot}_library")(items, store.get(grp.key, ""))
         # M33：切换组保持当前方向/动作（直到用户主动改变）；
         # 新组缺失该组合时由 show_group 兜底回退默认
         direction, action = self.matrix.current()
@@ -741,6 +752,97 @@ class MainWindow(QMainWindow):
             name = "无"
         gname = self._group.display_name or self._group.key
         self.statusBar().showMessage(f"🕊 套装「{gname}」穿戴翅膀：{name}", 3000)
+        self._after_matrix_change()
+
+    # ---------------- M38：穿戴时装/头发/武器（跨 ID 形象组） ----------------
+    _LOOK_SLOTS = ("body", "hair", "weapon")
+    _LOOK_SLOT_CN = {"body": "时装", "hair": "头发", "weapon": "武器"}
+
+    def _load_dressed_look(self, slot: str) -> dict[str, str]:
+        """M38：从 QSettings 读取各组的穿戴选择 {组key: 形象组key}。"""
+        self._settings.beginGroup(f"layering/dressed_{slot}")
+        out = {k: self._settings.value(k, "", type=str)
+               for k in self._settings.childKeys()}
+        self._settings.endGroup()
+        return out
+
+    def _save_dressed_look(self, slot: str, group_key: str, look_key: str) -> None:
+        self._settings.beginGroup(f"layering/dressed_{slot}")
+        self._settings.setValue(group_key, look_key)
+        self._settings.endGroup()
+        self._settings.sync()
+
+    def _group_by_key(self, key: str) -> IdGroup | None:
+        if self._result is None or not key:
+            return None
+        return next((g for g in self._result.groups if g.key == key), None)
+
+    def _look_group_label(self, grp: IdGroup) -> str:
+        """可穿戴形象组的下拉显示名：匹配表中文名优先，无则组名/ID。"""
+        cn = None
+        if self._namemap is not None and grp.parts:
+            cn = self._namemap.lookup(grp.parts[0].name, grp.res_id)
+        return cn or grp.display_name or grp.res_id
+
+    def _look_library(self, slot: str) -> list[tuple[str, str]]:
+        """M38：可穿戴的形象组列表 [(组key, 显示名)]——拥有该部位的常规组。"""
+        out: list[tuple[str, str]] = []
+        for g in self._result.groups:
+            if g.is_outfit or g.is_variant or g.is_flat:
+                continue
+            if not any(p.part == slot for p in g.parts):
+                continue
+            out.append((g.key, self._look_group_label(g)))
+        return out
+
+    def _dressed_look_parts(self, display: list[PartData]) -> list[PartData]:
+        """M38：当前组穿戴的时装/头发/武器组的全部渲染部件（叠层与空帧抽样共用）。
+
+        显示部件（含形象组合）已有该部位 → 跳过该槽位，不重复叠加。
+        """
+        if self._group is None:
+            return []
+        have = {p.part for p in display}
+        out: list[PartData] = []
+        for slot in self._LOOK_SLOTS:
+            if slot in have:
+                continue
+            look_key = getattr(self, f"_dressed_{slot}").get(self._group.key, "")
+            grp = self._group_by_key(look_key)
+            if grp is None:
+                continue
+            out.extend(self._render_parts(grp))
+        if out and self._tpl is not None:
+            out.sort(key=lambda p: self._tpl.layer_rank(p.part))
+        return out
+
+    def _append_dressed_look(self, layers, flat_mask, fx_offsets, part_keys,
+                             display: list[PartData], direction, action) -> None:
+        """M38：把穿戴的形象组部件追加为层（原地修改；取帧方式同翅膀，居中对齐）。"""
+        for p in self._dressed_look_parts(display):
+            ad = p.action_data(direction, action)
+            if ad is None:
+                ad = next((a for col in p.matrix.values() for a in col.values()), None)
+            if ad is None or not ad.frames:
+                continue
+            idx = len(layers)
+            layers.append(ad.frames)
+            flat_mask.append(True)
+            part_keys.append(p.name)
+            fx_offsets[idx] = self._get_fx_offset(p.name)
+
+    def _on_look_dressed(self, slot: str, look_key: str) -> None:
+        """M38：穿戴/脱下时装/头发/武器 → 按当前组 key 记忆并刷新。"""
+        if self._group is None or slot not in self._LOOK_SLOTS:
+            return
+        self._save_dressed_look(slot, self._group.key, look_key)
+        setattr(self, f"_dressed_{slot}", self._load_dressed_look(slot))
+        if look_key:
+            grp = self._group_by_key(look_key)
+            name = self._look_group_label(grp) if grp else look_key
+            gname = self._group.display_name or self._group.res_id
+            self.statusBar().showMessage(
+                f"👤 {gname} 穿戴{self._LOOK_SLOT_CN[slot]}：{name}", 3000)
         self._after_matrix_change()
 
     def _on_fx_offset_changed(self, part_key: str, dx: int, dy: int) -> None:
@@ -959,13 +1061,14 @@ class MainWindow(QMainWindow):
         return self._blank_cache.get(key, set()) if key else set()
 
     def _blank_target_matrix(self) -> dict:
-        """抽样目标 matrix：单部件用自身；组用显示部件并集（M37：含形象组合，与叠层口径一致）。"""
+        """抽样目标 matrix：单部件用自身；组用显示部件并集（M37 形象组合 + M38 穿戴，与叠层口径一致）。"""
         if self._part is not None:
             return self._part.matrix
         if self._group is None:
             return {}
+        display = self._display_parts(self._group)
         union: dict[str, dict] = {}
-        for p in self._display_parts(self._group):
+        for p in display + self._dressed_look_parts(display):
             for d, col in p.matrix.items():
                 row = union.setdefault(d, {})
                 for a, ad in col.items():
@@ -1057,6 +1160,9 @@ class MainWindow(QMainWindow):
         # M28：记录「真正的特效层」下标（组内 flat 部件）——穿戴的翅膀虽也是
         # flat 层，但按 (方向,动作) 取帧、对齐本就准确，不参与 Ctrl+方向键微调。
         self._fx_layer_indices = {i for i, f in enumerate(flat_mask) if f}
+        # M38：先追加穿戴的时装/头发/武器（跨 ID 形象组，含其影子，按 layer_order 内部排序）
+        self._append_dressed_look(layers, flat_mask, fx_offsets, part_keys,
+                                  display, direction, action)
         # M28：先追加穿戴的翅膀（在角色之上）→ 再追加穿戴特效（置顶最上层）
         self._append_dressed_wings(layers, flat_mask, fx_offsets, part_keys)
         idx = self._append_dressed_fx(layers, flat_mask, fx_offsets, part_keys)

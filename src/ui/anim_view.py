@@ -347,6 +347,7 @@ class PartToggles(QFrame):
     toggled = Signal(str, bool)   # (part 名, 是否可见)
     fx_dressed = Signal(str)      # M26：穿戴特效 key（"" = 不穿戴）
     wing_dressed = Signal(str)    # M28：穿戴翅膀 key（"" = 不穿戴）
+    look_dressed = Signal(str, str)  # M38：(部位槽位 body/hair/weapon, 形象组 key；"" = 脱下)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -385,6 +386,13 @@ class PartToggles(QFrame):
 
         self._fx_label, self._fx_combo = add_wear_row("穿戴特效", self._on_fx_changed)
         self._wing_label, self._wing_combo = add_wear_row("穿戴翅膀", self._on_wing_changed)
+        # M38：跨 ID 穿戴——时装/头发/武器（当前形象缺哪类才显示哪类的下拉）
+        self._body_label, self._body_combo = add_wear_row(
+            "穿戴时装", lambda i: self.look_dressed.emit("body", self._body_combo.itemData(i) or ""))
+        self._hair_label, self._hair_combo = add_wear_row(
+            "穿戴头发", lambda i: self.look_dressed.emit("hair", self._hair_combo.itemData(i) or ""))
+        self._weapon_label, self._weapon_combo = add_wear_row(
+            "穿戴武器", lambda i: self.look_dressed.emit("weapon", self._weapon_combo.itemData(i) or ""))
 
         # 按钮列表滚动区：高度受限时出现滚动条，按钮不再溢出裁剪
         self._scroll = QScrollArea()
@@ -440,6 +448,18 @@ class PartToggles(QFrame):
         """M28：设置「穿戴翅膀」下拉框。items = [(翅膀 key, 显示名), ...]。"""
         self._set_wear_library(self._wing_label, self._wing_combo, items, current)
 
+    def set_body_library(self, items: list[tuple[str, str]], current: str = "") -> None:
+        """M38：设置「穿戴时装」下拉框。items = [(形象组 key, 显示名), ...]。"""
+        self._set_wear_library(self._body_label, self._body_combo, items, current)
+
+    def set_hair_library(self, items: list[tuple[str, str]], current: str = "") -> None:
+        """M38：设置「穿戴头发」下拉框。"""
+        self._set_wear_library(self._hair_label, self._hair_combo, items, current)
+
+    def set_weapon_library(self, items: list[tuple[str, str]], current: str = "") -> None:
+        """M38：设置「穿戴武器」下拉框。"""
+        self._set_wear_library(self._weapon_label, self._weapon_combo, items, current)
+
     def _on_fx_changed(self, index: int) -> None:
         """特效下拉框切换 → 发出穿戴信号（重建期间被 blockSignals 屏蔽）。"""
         if index < 0:
@@ -457,11 +477,14 @@ class PartToggles(QFrame):
     @property
     def wear_selector_count(self) -> int:
         """M28：可见的穿戴下拉框数量（供 _reposition_toggles 计算面板高度）。"""
-        return sum(1 for c in (self._fx_combo, self._wing_combo) if c.isVisible())
+        return sum(1 for c in (self._fx_combo, self._wing_combo, self._body_combo,
+                               self._hair_combo, self._weapon_combo) if c.isVisible())
 
     def wear_selector_hint_width(self) -> int:
         """M28：可见穿戴下拉框的最大建议宽度（供 _reposition_toggles 算面板宽度）。"""
-        ws = [c.sizeHint().width() for c in (self._fx_combo, self._wing_combo) if c.isVisible()]
+        ws = [c.sizeHint().width() for c in (self._fx_combo, self._wing_combo,
+                                             self._body_combo, self._hair_combo,
+                                             self._weapon_combo) if c.isVisible()]
         return max(ws) if ws else 0
 
     def set_parts(self, parts: dict[str, str], hidden: set[str]) -> None:
@@ -890,6 +913,25 @@ class AnimView(QFrame):
     def set_wing_library(self, items: list[tuple[str, str]], current: str = "") -> None:
         """M28：把全局翅膀库灌进显示层面板的下拉框；空列表则隐藏。"""
         self._toggles.set_wing_library(items, current)
+        self._reposition_toggles()
+
+    def look_dressed_signal(self):
+        """M38：穿戴时装/头发/武器信号 (部位槽位, 形象组 key)。"""
+        return self._toggles.look_dressed
+
+    def set_body_library(self, items: list[tuple[str, str]], current: str = "") -> None:
+        """M38：把可穿戴的时装（body）形象组灌进下拉框；空列表则隐藏。"""
+        self._toggles.set_body_library(items, current)
+        self._reposition_toggles()
+
+    def set_hair_library(self, items: list[tuple[str, str]], current: str = "") -> None:
+        """M38：把可穿戴的头发（hair）形象组灌进下拉框。"""
+        self._toggles.set_hair_library(items, current)
+        self._reposition_toggles()
+
+    def set_weapon_library(self, items: list[tuple[str, str]], current: str = "") -> None:
+        """M38：把可穿戴的武器（weapon）形象组灌进下拉框。"""
+        self._toggles.set_weapon_library(items, current)
         self._reposition_toggles()
 
     def show_sequence(
