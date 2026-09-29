@@ -1,7 +1,7 @@
 {
   "name": "天命装",
   "folder_pattern": "{id}(_{part})?",
-  "parts": ["hair", "body", "weapon", "wings", "ride_front", "ride_back", "shadow", "fills"],
+  "parts": ["hair", "body", "weapon", "wings", "ride_front", "ride_back", "shadow", "fills", "worldboss"],
   "directions": ["E", "N", "NW", "S", "SE"],
   "actions": ["idle", "run", "attack", "skill", "hurt", "block", "dead", "ride_idle", "ride_run"],
   "hierarchy": ["direction", "action"],
@@ -55,6 +55,13 @@
       "S": ["ride_idle", "ride_run"],
       "NW": ["ride_idle", "ride_run"],
       "SE": ["ride_idle", "ride_run"]
+    },
+    "worldboss": {
+      "E": [],
+      "N": [],
+      "S": [],
+      "NW": [],
+      "SE": ["idle", "attack", "skill"]
     }
   }
 }

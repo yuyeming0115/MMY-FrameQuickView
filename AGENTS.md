@@ -83,16 +83,27 @@ E:\Temp\天命装\50152101_body
 > （GIF 区最顶层）；阈值计数含特效层。特效无方向/动作约定：任何 (方向,动作) 下叠自身序列，
 > 合成帧数 = max(各层)；配套校验/fills 警告均豁免特效；无套装或超阈值时特效维持独立散件。
 
+> ⚠️ worldboss 变体（M36）：`{id}_worldboss` 后缀文件夹（如 `504004_worldboss`）是同 ID
+> 的「世界BOSS」独立渲染变体，实测约定为**仅 SE × idle/attack/skill**。并入同 ID 组显示
+> （子行「世界BOSS · 中文名」），**不参与叠层/配套校验/组级查漏基准**；按模板
+> `action_rules.worldboss` 查漏（SE 缺 idle/attack/skill 标红，E/N/NW/S 记「不适用」灰显）。
+
+> ⚠️ 空帧检测（M36）：帧文件存在但**全透明**（美术占位图，如 504004 的 E/N/NW/S 全方向）
+> 时——动作/方向按钮角标显示红「空」，A/B 区画布中央提示「⚠ 空帧 · 图片全透明（占位图）」，
+> 状态栏追加 ⚠ 空帧段。抽样在选中后由后台线程进行（每序列仅解码首帧，会话级缓存），
+> 扫描阶段仍只读文件名。
+
 ### 默认模板（templates/default.json）
 
 | 类别 | 名称 |
 |------|------|
-| 部位 | hair, body, weapon, wings, ride_front, ride_back, shadow, fills |
+| 部位 | hair, body, weapon, wings, ride_front, ride_back, shadow, fills, worldboss |
 | 方向 | E, N, NW, S, SE |
 | 动作 | idle, run, attack, skill, hurt, block, dead, ride_idle, ride_run |
 | 层级顺序 | direction → action（已确认为默认；模板可反转为 action → direction） |
 | 帧命名 | `0001.png` 四位补零；同方向内跨动作连续编号（idle 0001-0008, attack 0017-0024） |
 | 叠层顺序 | layer_order（模板可配）：shadow 最底 → body → hair → weapon → wings → fills… |
+| worldboss 规则 | action_rules.worldboss：仅 SE 期望 [idle, attack, skill]，其余方向不适用（M36） |
 
 ### 规则模板系统
 

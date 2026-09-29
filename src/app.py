@@ -3,12 +3,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QFileSystemWatcher, QSettings, Qt, QTimer
+from PySide6.QtCore import QEvent, QFileSystemWatcher, QSettings, Qt, QTimer, QThread, Signal
 from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
     QMessageBox, QPushButton, QSplitter, QVBoxLayout, QWidget,
 )
 
+from .core.blankcheck import blank_sequences
 from .core.namemap import NameMap, discover_map_file
 from .core.scanner import IdGroup, PartData, ScanResult, scan_root
 from .core.stats import build_hud_stats
@@ -54,6 +55,24 @@ QScrollBar::add-page, QScrollBar::sub-page { background: transparent; border: no
 """
 
 
+class _BlankCheckWorker(QThread):
+    """M36：空帧抽样后台线程——对 (方向,动作) 序列首帧做 alpha 检测。
+
+    每序列仅解码首帧（≤ 约 30 次解码）；结果 (key, 空序列集合) 回主线程后
+    由 app 校验 key 是否仍为当前选中项（过期结果直接丢弃，只写缓存）。
+    """
+
+    blank_ready = Signal(str, object)   # (选中项 key, {(direction, action)})
+
+    def __init__(self, matrix: dict, key: str, parent=None):
+        super().__init__(parent)
+        self._matrix = matrix
+        self._key = key
+
+    def run(self) -> None:
+        self.blank_ready.emit(self._key, blank_sequences(self._matrix))
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -95,6 +114,9 @@ class MainWindow(QMainWindow):
         self._fills_check = bool(self._settings.value("checks/fills", True, type=bool))
         # M34：固定画布对齐模式（跨视图角色位置不漂移；QSettings 记忆）
         self._canvas_align = bool(self._settings.value("display/canvas_align", False, type=bool))
+        # M36：空帧抽样缓存 {选中项key: {(方向,动作)}}（会话级内存缓存，二次选中零 IO）
+        self._blank_cache: dict[str, set] = {}
+        self._blank_workers: list[_BlankCheckWorker] = []
         # M30：快捷文件夹（收藏 + 最近拖入），QSettings 持久化
         self._quick_favs: list[str] = []
         self._quick_recents: list[str] = []
@@ -612,8 +634,9 @@ class MainWindow(QMainWindow):
         self._part = None
         # 右侧逐部件显隐 toggle（按 layer_order 从底到顶给中文名）；
         # 套装组内重名部件（如两个 shadow）用 `部件·ID` 区分 key
+        # M36：worldboss 变体不参与叠层（无 toggle），除非组内只有 worldboss
         parts = {self._toggle_key(p, grp): self._toggle_label(p, grp)
-                 for p in grp.parts}
+                 for p in self._render_parts(grp)}
         self.anim_view.show_part_toggles(parts, self._hidden_parts)
         # M26：注入全局特效库下拉框，并恢复该套装上次穿戴的特效
         self.anim_view.set_fx_library(
@@ -754,12 +777,6 @@ class MainWindow(QMainWindow):
         self._update_matrix(direction, action)
         self._after_matrix_change()
 
-    def _update_matrix(self, direction: str | None, action: str | None) -> None:
-        if self._group is not None:
-            self.matrix.show_group(self._group, direction, action)
-        elif self._part is not None:
-            self.matrix.show_part(self._part, direction, action)
-
     def _after_matrix_change(self) -> None:
         # 同步当前方向给 overlay，使画布高亮与按钮矩阵一致
         direction, _ = self.matrix.current()
@@ -781,14 +798,17 @@ class MainWindow(QMainWindow):
             cn = self._namemap.lookup(self._part.name, self._part.res_id) \
                 if self._namemap is not None else None
             stats.title = cn or self._part.name
-            stats.subtitle = f"ID {self._part.res_id} · {self._part.part or '整体'}"
+            # M36：部位显示走中文名映射（worldboss → 世界BOSS）
+            part_label = (self._namemap.part_cn(self._part.part)
+                          if self._namemap is not None else (self._part.part or "整体"))
+            stats.subtitle = f"ID {self._part.res_id} · {part_label}"
         else:
             stats = build_hud_stats(self._group, self._tpl)
             gname = self._group.display_name or self._group.res_id
             cn = self._namemap.lookup(gname, self._group.res_id) \
                 if self._namemap is not None else None
             stats.title = cn or gname
-            n = len(self._group.parts)
+            n = len(self._render_parts(self._group))
             stats.subtitle = (f"套装 · {n}件" if self._group.is_outfit
                               else f"ID {self._group.res_id} · {n}部件")
         stats.current = (direction, action)
@@ -837,11 +857,96 @@ class MainWindow(QMainWindow):
             return self._part.action_data(direction, action)
         if self._group is not None:
             # 组模式下帧数/连续性以首个有该组合的部件为准
-            for p in self._group.parts:
+            for p in self._render_parts(self._group):
                 ad = p.action_data(direction, action)
                 if ad:
                     return ad
         return None
+
+    def _render_parts(self, grp: IdGroup) -> list[PartData]:
+        """M36：组视图参与叠层/渲染/统计的部件。
+
+        worldboss 是独立变体（叠到本体上没有意义）→ 常规排除；
+        组内只有 worldboss（该 ID 无主体）时退化为全部渲染，否则组视图无内容。
+        """
+        core = [p for p in grp.parts if p.part != "worldboss"]
+        return core or list(grp.parts)
+
+    # ---------------- M36：空帧抽样（全透明占位图检测） ----------------
+    def _sync_blank_check(self) -> None:
+        """把当前选中项的空序列集合回填给按钮矩阵；未命中缓存则启动后台抽样。"""
+        key = self._blank_key()
+        if key is None:
+            self.matrix.set_blank(set())
+            return
+        cached = self._blank_cache.get(key)
+        if cached is not None:
+            self.matrix.set_blank(cached)
+            return
+        self.matrix.set_blank(set())
+        self._start_blank_worker(key)
+
+    def _blank_key(self) -> str | None:
+        if self._part is not None:
+            return str(self._part.folder)
+        if self._group is not None:
+            return self._group.key
+        return None
+
+    def _current_blank(self) -> set:
+        """当前选中项的空序列集合（未抽样/抽样中返回空集）。"""
+        key = self._blank_key()
+        return self._blank_cache.get(key, set()) if key else set()
+
+    def _blank_target_matrix(self) -> dict:
+        """抽样目标 matrix：单部件用自身；组用渲染部件并集（与叠层口径一致）。"""
+        if self._part is not None:
+            return self._part.matrix
+        if self._group is None:
+            return {}
+        union: dict[str, dict] = {}
+        for p in self._render_parts(self._group):
+            for d, col in p.matrix.items():
+                row = union.setdefault(d, {})
+                for a, ad in col.items():
+                    row.setdefault(a, ad)
+        return union
+
+    def _start_blank_worker(self, key: str) -> None:
+        # 同 key 已有抽样在跑 → 等它的结果即可（避免重复解码与重复回填）
+        if any(getattr(w, "_key", None) == key for w in self._blank_workers
+               if w.isRunning()):
+            return
+        target = self._blank_target_matrix()
+        if not target:
+            return
+        worker = _BlankCheckWorker(target, key)
+        worker.blank_ready.connect(self._on_blank_ready)
+        worker.finished.connect(self._on_blank_worker_finished)
+        self._blank_workers.append(worker)
+        worker.start()
+
+    def _on_blank_ready(self, key: str, blank: set) -> None:
+        self._blank_cache[key] = blank
+        if key == self._blank_key():
+            # 仍停留在该选中项 → **就地**刷新角标与状态栏（不重建按钮、不动 A/B 区，
+            # 避免外部按钮引用/悬停态失效，也避免重复解码）
+            self.matrix.apply_blank(blank)
+            self._refresh_status()
+
+    def _on_blank_worker_finished(self) -> None:
+        w = self.sender()
+        if w in self._blank_workers:
+            self._blank_workers.remove(w)
+        w.deleteLater()
+
+    def _update_matrix(self, direction: str | None, action: str | None) -> None:
+        # M36：先回填空帧角标数据（缓存命中同步；未命中置空并后台抽样）
+        self._sync_blank_check()
+        if self._group is not None:
+            self.matrix.show_group(self._group, direction, action)
+        elif self._part is not None:
+            self.matrix.show_part(self._part, direction, action)
 
     def _layers_for_current(self) -> tuple[
         list[list[Path]], list[bool], dict[int, tuple[int, int]], list[str]
@@ -874,8 +979,8 @@ class MainWindow(QMainWindow):
             # M28：单部件视图下，特效自身就是可微调层
             self._fx_layer_indices = {0} if self._part.is_flat else set()
             return layers, flat_mask, fx_offsets, part_keys
-        # 组模式：按 layer_rank 排序的 parts 各取 (d,a) 帧
-        for p in self._group.parts:
+        # 组模式：按 layer_rank 排序的渲染部件（M36：worldboss 变体不参与叠层）各取 (d,a) 帧
+        for p in self._render_parts(self._group):
             key = self._toggle_key(p, self._group)
             if key in self._hidden_parts:
                 continue
@@ -1058,7 +1163,7 @@ class MainWindow(QMainWindow):
         segs: list[str] = []
         if self._group is not None:
             gname = self._group.display_name or self._group.res_id
-            segs.append(f"组 {gname}（{len(self._group.parts)} 层叠合 · shadow 最底）")
+            segs.append(f"组 {gname}（{len(self._render_parts(self._group))} 层叠合 · shadow 最底）")
             fxs = [p for p in self._group.parts if p.is_flat]
             if fxs:
                 fx_ad = next((a for p in fxs for col in p.matrix.values() for a in col.values()), None)
@@ -1078,6 +1183,8 @@ class MainWindow(QMainWindow):
                 rng = f"{ad.numbers[0]:04d}–{ad.numbers[-1]:04d}"
             segs.append(f"{ad.count} 帧（{rng}）")
             segs.append("✅ 区间内帧号连续" if ad.continuous else f"⚠ 缺帧 {ad.gaps[:5]}")
+            if (direction, action) in self._current_blank():
+                segs.append("⚠ 空帧（图片全透明，占位图）")
         elif direction and action:
             segs.append("当前组合无资源")
         if self._part is not None:

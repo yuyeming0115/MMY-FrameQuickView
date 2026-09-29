@@ -270,9 +270,16 @@ class PartList(QFrame):
                         # 套装组跨 ID：子项 = `ID 中文`（如 501031005 武器影子）
                         label = f"{pd.res_id} {cn}"
                     else:
-                        label = pd.part if pd.part else "（整体资源）"
-                        if self._namemap:
-                            label = f"{label} · {cn}"
+                        if pd.part == "worldboss":
+                            # M36：worldboss 变体子行 =「世界BOSS · ID中文名」
+                            # （part 级 cn 已是「世界BOSS」，这里拼 ID 中文名才有信息量）
+                            id_cn = self._namemap.lookup(pd.name, pd.res_id) \
+                                if self._namemap else None
+                            label = f"世界BOSS · {id_cn}" if id_cn else "世界BOSS"
+                        else:
+                            label = pd.part if pd.part else "（整体资源）"
+                            if self._namemap:
+                                label = f"{label} · {cn}"
                     if pd.has_issues:
                         label += "  🔴"
                     elif self._fills_check and pd.has_warnings:

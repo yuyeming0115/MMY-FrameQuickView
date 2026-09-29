@@ -32,6 +32,8 @@ class DecodeWorker(QThread):
         self._flat_mask = flat_mask
         self._fx_offsets = fx_offsets
         self._canvas_align = canvas_align   # M34：固定画布对齐模式
+        # M36：全部帧均无有效像素（全透明占位图）时为 True，供视图层显示空帧提示
+        self.all_blank = False
 
     def run(self) -> None:
         # 收集所有路径
@@ -61,6 +63,8 @@ class DecodeWorker(QThread):
                 b, sz = None, (0, 0)
             bbox_cache[p] = b
             size_cache[p] = sz
+        # M36：全帧 alpha bbox 均为 None → 整个合成结果不可见，标记空帧
+        self.all_blank = all(b is None for b in bbox_cache.values())
 
         def _is_flat(j: int) -> bool:
             return bool(self._flat_mask and j < len(self._flat_mask) and self._flat_mask[j])

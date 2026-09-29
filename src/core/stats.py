@@ -89,12 +89,16 @@ def part_combos(p: PartData, tpl: Template | None = None) -> list[ComboStat]:
 
 
 def _pick_primary(parts: list[PartData]) -> PartData | None:
-    """套装主件：body 优先 → 首个非 shadow/fills 主体 → 首个非特效 → 首个。"""
+    """套装主件：body 优先 → 首个非 shadow/fills 主体 → 首个非特效 → 首个。
+
+    M36：worldboss 变体不作为主件（独立变体，非叠层主体），排在纯 ID 整体之后。
+    """
     if not parts:
         return None
     return (next((p for p in parts if p.part == "body"), None)
-            or next((p for p in parts if p.part not in ("shadow", "fills", None)
+            or next((p for p in parts if p.part not in ("shadow", "fills", "worldboss", None)
                      and not p.is_flat), None)
+            or next((p for p in parts if not p.is_flat and p.part != "worldboss"), None)
             or next((p for p in parts if not p.is_flat), None)
             or parts[0])
 
@@ -124,8 +128,10 @@ def group_combos(grp: IdGroup, tpl: Template | None = None) -> HudStats:
         stats.grand = sum(r.count for r in rows)
         return stats
 
-    # 非特效部件：并集组合 + 主件口径
-    normal = [p for p in parts if not p.is_flat]
+    # 非特效部件：并集组合 + 主件口径（M36：worldboss 变体不参与并集与 mismatch，
+    # 其 SE 动作不得掩盖主体的组级账目；组内只有 worldboss 时退化为 worldboss 自身）
+    normal = ([p for p in parts if not p.is_flat and p.part != "worldboss"]
+              or [p for p in parts if not p.is_flat])
     combos: set[tuple[str, str]] = set()
     for p in normal:
         for d, col in p.matrix.items():
