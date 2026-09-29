@@ -287,23 +287,15 @@ class _AnimCanvas(QLabel):
             painter.setBrush(QBrush(bg))
             painter.drawRoundedRect(rect.adjusted(2, 2, -2, -2), 6, 6)
 
-            # 边框：当前=金色细实线；悬浮=米白实线；其他=淡虚线
-            pen = QPen()
-            if is_active:
-                pen.setColor(QColor(232, 228, 217, 200))
-                pen.setStyle(Qt.SolidLine)
-                pen.setWidth(2)
-            elif is_current:
-                pen.setColor(QColor(212, 175, 55, 140))
-                pen.setStyle(Qt.SolidLine)
-                pen.setWidth(1)
-            else:
-                pen.setColor(QColor(150, 161, 173, 40 if is_avail else 22))
+            # 边框：M35.1 高亮格（当前/悬浮）不画边框线——格子边界靠 3x3 等分
+            # 与底色已可辨，实线（金/白）反而抢眼（用户反馈去掉）；其余格淡虚线
+            if not (is_active or is_current):
+                pen = QPen(QColor(150, 161, 173, 40 if is_avail else 22))
                 pen.setStyle(Qt.DashLine)
                 pen.setWidth(1)
-            painter.setPen(pen)
-            painter.setBrush(Qt.NoBrush)
-            painter.drawRoundedRect(rect.adjusted(2, 2, -2, -2), 6, 6)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRoundedRect(rect.adjusted(2, 2, -2, -2), 6, 6)
 
             # 文字：当前方向用金色，悬浮用全亮米白，其余淡灰
             if is_active:
@@ -507,7 +499,10 @@ class AnimView(QFrame):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(4)
 
-        # 左：方向/动作按钮矩阵容器（透明底，固定宽，顶部对齐）
+        # 左：方向/动作按钮矩阵容器（透明底，固定宽）。
+        # M35.1：不能加 Qt.AlignTop——对齐会退化为按 sizeHint 计算容器高度，
+        # 而 QScrollArea 的 sizeHint 在主窗口环境下会塌缩（实测 52px），
+        # 导致按钮列只剩标题+第一个按钮；由布局直接拉伸占满整列高度。
         self._matrix_container = QFrame()
         self._matrix_container.setAutoFillBackground(False)
         self._matrix_container.setStyleSheet(
@@ -528,8 +523,8 @@ class AnimView(QFrame):
             "QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }"
         )
         self._matrix_scroll.viewport().setAutoFillBackground(False)
-        ml.addWidget(self._matrix_scroll)
-        body.addWidget(self._matrix_container, 0, Qt.AlignTop)
+        ml.addWidget(self._matrix_scroll, 1)
+        body.addWidget(self._matrix_container)
 
         # 右：canvas host——canvas 铺满；toggles / HUD 为手动定位悬浮子控件，
         # 不进布局只占自身尺寸，其余区域点击不受影响。
