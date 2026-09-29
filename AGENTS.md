@@ -83,10 +83,11 @@ E:\Temp\天命装\50152101_body
 > （GIF 区最顶层）；阈值计数含特效层。特效无方向/动作约定：任何 (方向,动作) 下叠自身序列，
 > 合成帧数 = max(各层)；配套校验/fills 警告均豁免特效；无套装或超阈值时特效维持独立散件。
 
-> ⚠️ worldboss 变体（M36）：`{id}_worldboss` 后缀文件夹（如 `504004_worldboss`）是同 ID
-> 的「世界BOSS」独立渲染变体，实测约定为**仅 SE × idle/attack/skill**。并入同 ID 组显示
-> （子行「世界BOSS · 中文名」），**不参与叠层/配套校验/组级查漏基准**；按模板
-> `action_rules.worldboss` 查漏（SE 缺 idle/attack/skill 标红，E/N/NW/S 记「不适用」灰显）。
+> ⚠️ worldboss 变体（M36.1）：`{id}_worldboss` 后缀文件夹（如 `504004_worldboss`）是同 ID
+> 「世界BOSS」的独立渲染变体，实测约定为**仅 SE × idle/attack/skill**。在左栏**独立成主项**
+> 显示 `504004_世界BOSS · 黑龙王`（不作为同 ID 组子项），排序紧跟主体组；**不参与叠层/
+> 配套校验/组级查漏基准**；按模板 `action_rules.worldboss` 查漏（SE 缺 idle/attack/skill
+> 标红，E/N/NW/S 记「不适用」灰显）。
 
 > ⚠️ 空帧检测（M36）：帧文件存在但**全透明**（美术占位图，如 504004 的 E/N/NW/S 全方向）
 > 时——动作/方向按钮角标显示红「空」，A/B 区画布中央提示「⚠ 空帧 · 图片全透明（占位图）」，

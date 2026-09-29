@@ -105,29 +105,36 @@ def main():
         single = scan_root(tmp / "504004_worldboss", TPL)
         assert len(single.parts) == 1 and single.parts[0].part == "worldboss"
         assert single.parts[0].res_id == "504004"
-        print("  ✓ 解析为 (504004, worldboss)")
+        assert len(single.groups) == 1 and single.groups[0].is_variant
+        print("  ✓ 解析为 (504004, worldboss)，独立变体组")
 
-        print("== 4. plain + worldboss 同组 ==")
-        g4 = next(g for g in res.groups if g.res_id == "504004")
-        assert [(p.name, p.part) for p in g4.parts] == [
-            ("504004", None), ("504004_worldboss", "worldboss")], f"实际 {g4.parts}"
-        assert g4.effective_type == "non_protagonist", f"组类型应为主体 {g4.effective_type}"
+        print("== 4. plain 主体组 + worldboss 变体主项 ==")
+        g4 = next(g for g in res.groups if g.res_id == "504004" and not g.is_variant)
+        assert [(p.name, p.part) for p in g4.parts] == [("504004", None)], f"实际 {g4.parts}"
+        assert g4.effective_type == "non_protagonist"
         assert g4.missing_directions == [] and g4.missing_actions == {}
         assert g4.unexpected_directions == []
-        assert g4.pairing_issues == [], f"worldboss 不应触发配套异常: {g4.pairing_issues}"
-        wb = g4.parts[1]
-        assert wb.effective_type == "worldboss"
-        assert wb.missing_directions == [] and wb.missing_actions == {}
-        assert wb.unexpected_directions == ["E", "N", "NW", "S"]
-        assert not wb.has_issues, "worldboss 变体符合自身约定，不应有 issues"
-        print("  ✓ 组级口径归主体；worldboss 仅 SE 查漏、其余方向「不适用」")
+        assert g4.pairing_issues == []
+        print("  ✓ plain 组保持主体口径，变体不再混入")
 
-        print("== 5. 主件口径 / mismatch 不受 worldboss 污染 ==")
+        gw = next(g for g in res.groups if g.is_variant and g.res_id == "504004")
+        assert [(p.name, p.part) for p in gw.parts] == [("504004_worldboss", "worldboss")]
+        assert gw.display_name == "504004_世界BOSS"
+        assert gw.effective_type == "worldboss"
+        assert gw.missing_directions == [] and gw.missing_actions == {}
+        assert gw.unexpected_directions == ["E", "N", "NW", "S"]
+        assert not gw.has_issues, "worldboss 变体符合自身约定，不应有 issues"
+        wb = gw.parts[0]
+        print("  ✓ worldboss 独立主项组（504004_世界BOSS），按自身规则查漏")
+
+        print("== 5. 主件口径 / 账目 ==")
         st = group_combos(g4, TPL)
         row = next(r for r in st.rows if (r.direction, r.action) == ("SE", "idle"))
-        assert row.count == 8, f"主件（plain）口径应 8 帧，实际 {row.count}"
-        assert row.mismatch == [], f"worldboss 不应参与 mismatch: {row.mismatch}"
-        print("  ✓ SE/idle 主件 8 帧，无 worldboss mismatch")
+        assert row.count == 8, f"plain 主件口径应 8 帧，实际 {row.count}"
+        st_w = group_combos(gw, TPL)
+        row_w = next(r for r in st_w.rows if (r.direction, r.action) == ("SE", "idle"))
+        assert row_w.count == 6, f"变体组账目应按自身 6 帧，实际 {row_w.count}"
+        print("  ✓ plain 8 帧 / 变体 6 帧各自独立成账")
 
         print("== 6. 全内容 BOSS 不受影响 ==")
         g1 = next(g for g in res.groups if g.res_id == "504001")
@@ -153,13 +160,13 @@ def main():
         assert blank_sequences(wb.matrix) == set(), "worldboss 帧有内容"
         print(f"  ✓ 检出 {len(blank)} 个空序列，SE 无误报")
 
-        _gui_tests(g4, wb, plain, blank, g16)
+        _gui_tests(g4, gw, wb, plain, blank, g16)
         print("\nALL M36 PASS")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _gui_tests(g4, wb, plain, blank, g16):
+def _gui_tests(g4, gw, wb, plain, blank, g16):
     print("== 9. GUI：方向灰显 + 空帧「空」角标 ==")
     from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
@@ -214,10 +221,20 @@ def _gui_tests(g4, wb, plain, blank, g16):
     # M29 会把 last/folder、last/selection 持久化到 QSettings（跨进程）；
     # 先快照、结束恢复，避免污染真实环境 / 后续 smoke 测试。
     settings = QSettings("MMY", "FrameQuickView")
-    saved_qs = {k: settings.value(k) for k in ("last/folder", "last/selection")}
+    saved_qs = {k: settings.value(k) for k in ("last/folder", "last/selection",
+                                               "display/layer_panel")}
+    settings.setValue("display/layer_panel", True)   # 面板开关测试从确定态开始
     win = MainWindow()
+    win.show()
     try:
         win._on_folder_dropped(g4.parts[0].folder.parent)
+        # M36.1：左栏应出现「504004_世界BOSS」主项
+        found = False
+        for i in range(win.part_list.tree.topLevelItemCount()):
+            if "504004_世界BOSS" in win.part_list.tree.topLevelItem(i).text(0):
+                found = True
+                break
+        assert found, "左栏应有 504004_世界BOSS 主项"
         win.part_list._select_by_key("GRP:504004")
         app.processEvents()
         win._on_direction_selected("E")            # 切到 E（504004 的 E 全为空图）
@@ -233,8 +250,26 @@ def _gui_tests(g4, wb, plain, blank, g16):
         assert cached == blank, f"端到端空帧缓存不符: {cached}"
         status = win.statusBar().currentMessage()
         assert "空帧" in status, f"状态栏应含空帧提示: {status}"
-        # 叠层渲染部件：worldboss 不计入（组 504004 = 1 层）
+        # 叠层渲染部件：worldboss 不计入（plain 组 1 层）
         assert len(win._render_parts(g4)) == 1
+
+        # M36.1：选中变体主项组 → HUD/状态栏
+        win.part_list._select_by_key("GRP:" + gw.key)
+        app.processEvents()
+        assert win._group is not None and win._group.is_variant
+        assert "504004_世界BOSS" in win.statusBar().currentMessage()
+
+        # M36.2：显示层面板折叠开关（底部「☰ 显示层」按钮）
+        layer_btn = win.anim_view._layer_btn
+        assert win.anim_view._toggles.isVisible(), "组视图下面板应默认可见"
+        layer_btn.setChecked(False)
+        app.processEvents()
+        assert not win.anim_view._toggles.isVisible(), "关闭开关后面板应收起"
+        assert settings.value("display/layer_panel", True, type=bool) is False, \
+            "开关状态应持久化到 QSettings"
+        layer_btn.setChecked(True)
+        app.processEvents()
+        assert win.anim_view._toggles.isVisible(), "重新打开后面板应恢复"
     finally:
         win.close()
         for k, v in saved_qs.items():

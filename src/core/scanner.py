@@ -84,12 +84,15 @@ class IdGroup:
     - ID 组：同 res_id 部件；key = res_id；组头显示由 part_list 查匹配表拼接
     - 套装组（M23）：同一父文件夹下跨 ID 部件；key = 父文件夹完整路径；
       display_name = 文件夹名去 `_部件` 后缀；res_id = body 部件的 ID
+    - 变体组（M36.1）：worldboss 变体独立成组（左栏主项）；key = 变体文件夹路径；
+      display_name = `{res_id}_世界BOSS`；组内仅 1 个 worldboss 部件
     """
     res_id: str
     parts: list[PartData] = field(default_factory=list)
     key: str = ""                             # 组唯一键（左栏选择/红点刷新/组查找用）
     is_outfit: bool = False                   # 是否套装组
-    display_name: str = ""                    # 套装组头显示名（ID 组为空）
+    is_variant: bool = False                  # M36.1：是否 worldboss 变体组（左栏主项）
+    display_name: str = ""                    # 套装/变体组头显示名（ID 组为空）
     # 配套异常：某部位缺失而组内其他部件拥有的 (direction, action)
     pairing_issues: list[str] = field(default_factory=list)
     # 按角色类型+方向基准的缺漏（组视图按钮矩阵/状态栏用）
@@ -521,12 +524,20 @@ def _find_part_units(root: Path, tpl: Template, max_depth: int) -> list[tuple[Pa
 
 def _group_parts(parts: list[PartData], tpl: Template, char_type_of=None,
                  outfit_by_parent: dict[Path, list[PartData]] | None = None) -> list[IdGroup]:
-    """分组：套装单元优先（M23），其余按 res_id 分组；并计算组级缺漏 + 配套校验。"""
+    """分组：套装单元优先（M23），worldboss 变体独立成组（M36.1），其余按 res_id 分组。
+
+    变体组（M36.1）：worldboss 不并入同 ID 组当子项，而是各自成为左栏主项
+    （组头 `{id}_世界BOSS · 中文名`），查漏按 worldboss 规则独立进行。
+    """
     outfit_members = {id(pd) for members in (outfit_by_parent or {}).values() for pd in members}
     by_id: dict[str, list[PartData]] = {}
+    wb_singles: list[PartData] = []
     for p in parts:
         if id(p) in outfit_members:
             continue    # 套装组部件不重复进 ID 组
+        if p.part == "worldboss":
+            wb_singles.append(p)    # M36.1：变体独立成组，不进同 ID 组
+            continue
         by_id.setdefault(p.res_id, []).append(p)
 
     groups: list[IdGroup] = []
@@ -549,6 +560,19 @@ def _group_parts(parts: list[PartData], tpl: Template, char_type_of=None,
 
     for parent, members in (outfit_by_parent or {}).items():
         groups.append(_build_outfit_group(parent, members, tpl))
+
+    for p in wb_singles:
+        grp = IdGroup(res_id=p.res_id, parts=[p])
+        raw_type = char_type_of(p.res_id) if char_type_of else None
+        grp.character_type = (tpl.resolve_char_type(raw_type) if raw_type
+                              else (tpl.infer_char_type(p.res_id, [p.part])
+                                    or tpl.default_character_type))
+        grp.key = str(p.folder)
+        grp.is_variant = True
+        grp.display_name = f"{p.res_id}_世界BOSS"
+        grp.category = tpl.classify(p.res_id, [p.part])
+        _finalize_group(grp, tpl)
+        groups.append(grp)
 
     groups.sort(key=lambda g: g.display_name or g.key)
     return groups

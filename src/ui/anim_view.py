@@ -506,6 +506,7 @@ class AnimView(QFrame):
     direction_overlay_clicked = Signal(str)  # 画布内点击/拖拽某方向热区时发出（等同按钮矩阵的方向点击）
     fx_offset_changed = Signal(str, int, int)  # (part_key, dx, dy) 特效偏移微调
     hud_toggled = Signal(bool)  # M32：HUD 信息面板开关变化（上层持久化用）
+    layer_panel_toggled = Signal(bool)  # M36.2：显示层面板开关变化（上层持久化用）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -565,6 +566,7 @@ class AnimView(QFrame):
         # 右侧逐部件显隐 toggle（组视图用）
         self._toggles = PartToggles(canvas_host)
         self._toggles.hide()
+        self._toggles_active = False   # M36.2：是否处于组视图（面板数据已就绪）
 
         # M32：HUD 信息面板（帧数账目），悬浮于右下角；
         # M32.1 紧凑/悬停展开高度变化 → 重新锚定右下角
@@ -629,6 +631,20 @@ class AnimView(QFrame):
         self._hud_btn.toggled.connect(self._on_hud_toggled)
         bar.addWidget(self._hud_btn)
 
+        # M36.2：显示层面板开关（组视图右上角的部件显隐/穿戴面板；默认开，上层持久化）
+        self._layer_btn = QPushButton("☰ 显示层")
+        self._layer_btn.setCheckable(True)
+        self._layer_btn.setChecked(True)
+        self._layer_btn.setToolTip(
+            "显示层面板开关（组视图）：\n"
+            "收起/展开右上角的 部件显隐 + 穿戴特效/穿戴翅膀 面板"
+        )
+        self._layer_btn.setStyleSheet(
+            "QPushButton:checked { color: #D4AF37; border-color: #D4AF37; }"
+        )
+        self._layer_btn.toggled.connect(self._on_layer_toggled)
+        bar.addWidget(self._layer_btn)
+
         bar.addStretch(1)
         outer.addLayout(bar)
 
@@ -688,13 +704,39 @@ class AnimView(QFrame):
 
     def show_part_toggles(self, parts: dict[str, str], hidden: set[str]) -> None:
         """组视图：显示右侧逐部件显隐 toggle。parts = {part 名: 中文名}。"""
+        self._toggles_active = True
         self._toggles.set_parts(parts, hidden)
-        self._toggles.show()
-        self._reposition_toggles()
+        # M36.2：面板开关关闭时保持隐藏（数据已就绪，打开开关即显示）
+        if self._layer_btn.isChecked():
+            self._toggles.show()
+            self._reposition_toggles()
 
     def hide_part_toggles(self) -> None:
         """单部件视图/无选中：隐藏右侧 toggle 列表。"""
+        self._toggles_active = False
         self._toggles.hide()
+
+    def set_layer_panel_visible(self, visible: bool) -> None:
+        """M36.2：启动恢复显示层面板开关（不重复发信号）。"""
+        if self._layer_btn.isChecked() != visible:
+            self._layer_btn.blockSignals(True)
+            self._layer_btn.setChecked(visible)
+            self._layer_btn.blockSignals(False)
+        if self._toggles_active:
+            if visible and not self._toggles.isVisible():
+                self._toggles.show()
+                self._reposition_toggles()
+            elif not visible:
+                self._toggles.hide()
+
+    def _on_layer_toggled(self, visible: bool) -> None:
+        if self._toggles_active:
+            if visible:
+                self._toggles.show()
+                self._reposition_toggles()
+            else:
+                self._toggles.hide()
+        self.layer_panel_toggled.emit(visible)
 
     # ---------------- M32：HUD 信息面板 ----------------
     def update_hud(self, stats) -> None:

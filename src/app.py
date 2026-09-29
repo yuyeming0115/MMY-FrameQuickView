@@ -139,6 +139,9 @@ class MainWindow(QMainWindow):
         # 恢复 HUD 信息面板开关（M32，默认开）
         self.anim_view.set_hud_visible(
             bool(self._settings.value("hud/visible", True, type=bool)))
+        # 恢复显示层面板开关（M36.2，默认开）
+        self.anim_view.set_layer_panel_visible(
+            bool(self._settings.value("display/layer_panel", True, type=bool)))
         # 恢复 A区「原图/自适应」模式
         saved_fit = self._settings.value("grid/fit_mode", False)
         if saved_fit is not None and bool(saved_fit) != self.grid_view._mode_btn.isChecked():
@@ -252,6 +255,8 @@ class MainWindow(QMainWindow):
         self.anim_view.wing_dressed_signal().connect(self._on_wing_dressed)  # M28 穿戴翅膀
         # M32：HUD 信息面板开关持久化
         self.anim_view.hud_toggled.connect(self._on_hud_toggled)
+        # M36.2：显示层面板开关持久化
+        self.anim_view.layer_panel_toggled.connect(self._on_layer_panel_toggled)
         panes.addWidget(self.grid_view)
         panes.addWidget(self.anim_view)
         panes.setStretchFactor(0, 5)
@@ -809,13 +814,22 @@ class MainWindow(QMainWindow):
                 if self._namemap is not None else None
             stats.title = cn or gname
             n = len(self._render_parts(self._group))
-            stats.subtitle = (f"套装 · {n}件" if self._group.is_outfit
-                              else f"ID {self._group.res_id} · {n}部件")
+            if self._group.is_outfit:
+                stats.subtitle = f"套装 · {n}件"
+            elif self._group.is_variant:
+                stats.subtitle = f"ID {self._group.res_id} · 世界BOSS"
+            else:
+                stats.subtitle = f"ID {self._group.res_id} · {n}部件"
         stats.current = (direction, action)
         self.anim_view.update_hud(stats)
 
     def _on_hud_toggled(self, visible: bool) -> None:
         self._settings.setValue("hud/visible", visible)
+        self._settings.sync()
+
+    def _on_layer_panel_toggled(self, visible: bool) -> None:
+        """M36.2：显示层面板开关持久化（QSettings）。"""
+        self._settings.setValue("display/layer_panel", visible)
         self._settings.sync()
 
     def _on_grid_frame_clicked(self, idx: int) -> None:
@@ -1163,7 +1177,10 @@ class MainWindow(QMainWindow):
         segs: list[str] = []
         if self._group is not None:
             gname = self._group.display_name or self._group.res_id
-            segs.append(f"组 {gname}（{len(self._render_parts(self._group))} 层叠合 · shadow 最底）")
+            if self._group.is_variant:
+                segs.append(f"变体 {gname}（{len(self._render_parts(self._group))} 层）")
+            else:
+                segs.append(f"组 {gname}（{len(self._render_parts(self._group))} 层叠合 · shadow 最底）")
             fxs = [p for p in self._group.parts if p.is_flat]
             if fxs:
                 fx_ad = next((a for p in fxs for col in p.matrix.values() for a in col.values()), None)
