@@ -1,17 +1,18 @@
 """B 区：GIF 动画预览（M3）+ 左侧方向/动作按钮矩阵 + 底部整行控制条。
 
-布局（M8）：
+布局（M8，M35 改回独立列）：
 - 外层 QVBoxLayout：
-    - 内嵌 QHBoxLayout：左 = ButtonMatrix 纵列 | 右 = canvas
+    - 内嵌 QHBoxLayout：左 = ButtonMatrix 纵列（独立列，不遮挡画布）| 右 = canvas
     - 底部 = 控制条（QHBoxLayout），跨左+右整行
 - 100% 原尺寸、透明无边框、并集 bbox 对齐
 - 播放 / 暂停、FPS 滑杆 (1–60)、上一帧 / 下一帧、循环模式
 - 默认透明融入 UI，可切换棋盘格背景（方便检查 alpha 毛边）
 - A 区点击某帧 → goto_frame(idx) 跳转并暂停
 
-显向 overlay（M8）：
+显向 overlay（M8，M35 弱化 + 双色区分）：
 - 3x3 网格（中心留给动画帧），8 个方向热区：NW/N/NE/W/E/SW/S/SE
 - 沉浸式：仅 hover / 拖拽时显示该方向热区，离开画布后全部隐藏
+- 视觉弱化：格子淡到「能区分、知道可点」即可；金色 = 当前方向，米白 = 悬浮指向
 - 点击某方向 = 触发 direction_overlay_clicked(direction)，等同按钮矩阵的方向点击
 - 按住并拖拽：以画布中心为原点计算角度，按 45° 分桶连续切换方向 → 模拟 idle 旋转
 - 不在当前模板 directions 内的方向（如 W/NE/SW）不响应点击/拖拽
@@ -27,8 +28,7 @@ from PySide6.QtCore import QEvent, Qt, QTimer, Signal, QPointF, QRectF
 from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractScrollArea, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel,
-    QPushButton, QScrollArea, QSizePolicy, QSlider, QStackedLayout, QVBoxLayout,
-    QWidget,
+    QPushButton, QScrollArea, QSlider, QVBoxLayout, QWidget,
 )
 
 from .hover_scroll import enable_hover_scroll
@@ -38,8 +38,7 @@ from .worker import DecodeWorker
 
 FPS_MIN, FPS_MAX = 1, 60
 
-# 左侧按钮矩阵列宽度（与 button_matrix.ButtonMatrix.setFixedWidth 保持一致）
-# 改这里记得同步。
+# 左侧按钮矩阵独立列宽度（M35：独立列布局，不再悬浮遮挡画布）
 LEFT_PANEL_WIDTH = 96
 
 # 8 方向网格槽位：(方向名, (row, col))；中心 (1,1) 留空放动画
@@ -256,7 +255,11 @@ class _AnimCanvas(QLabel):
         painter.end()
 
     def _paint_dir_overlay(self, painter: QPainter) -> None:
-        """绘制 3x3 方向热区（半透明虚线框 + 方向文字）；hover 或拖拽经过的方向更高亮。"""
+        """绘制 3x3 方向热区（M35 弱化版：淡到「能区分、知道可点」即可）。
+
+        双色语义：金色 = 当前方向（与按钮矩阵选中态同色系）；
+        米白 = 鼠标悬浮/拖拽指向（瞬时反馈）。两者不再同色。
+        """
         w, h = self.width(), self.height()
         font = painter.font()
         font.setPointSize(13)
@@ -271,40 +274,38 @@ class _AnimCanvas(QLabel):
                 continue
             is_active = (d == active_dir)
             is_avail = d in self._overlay_dirs
-            is_current = (d == self._current_dir)
+            is_current = (d == self._current_dir) and not is_active
 
-            # 背景填充：当前/hover 状态决定透明度
+            # 背景填充：整体极淡，仅提示可点击
             if is_active:
-                bg = QColor(212, 175, 55, 70)          # 金色高亮（hover/拖拽）
+                bg = QColor(232, 228, 217, 38)         # 悬浮：米白高亮
             elif is_current:
-                bg = QColor(212, 175, 55, 40)          # 金色弱高亮（当前方向）
+                bg = QColor(212, 175, 55, 30)          # 当前方向：金色弱底
             else:
-                bg = QColor(150, 161, 173, 18)         # 极弱灰背景
+                bg = QColor(150, 161, 173, 10)         # 其他：极弱灰
             painter.setPen(Qt.NoPen)
             painter.setBrush(QBrush(bg))
             painter.drawRoundedRect(rect.adjusted(2, 2, -2, -2), 6, 6)
 
-            # 边框：虚线灰/实线金
-            pen = QPen()
-            if is_active or is_current:
-                pen.setColor(QColor(212, 175, 55, 200))
-                pen.setStyle(Qt.SolidLine)
-                pen.setWidth(2)
-            else:
-                pen.setColor(QColor(150, 161, 173, 110 if is_avail else 50))
+            # 边框：M35.1 高亮格（当前/悬浮）不画边框线——格子边界靠 3x3 等分
+            # 与底色已可辨，实线（金/白）反而抢眼（用户反馈去掉）；其余格淡虚线
+            if not (is_active or is_current):
+                pen = QPen(QColor(150, 161, 173, 40 if is_avail else 22))
                 pen.setStyle(Qt.DashLine)
                 pen.setWidth(1)
-            painter.setPen(pen)
-            painter.setBrush(Qt.NoBrush)
-            painter.drawRoundedRect(rect.adjusted(2, 2, -2, -2), 6, 6)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRoundedRect(rect.adjusted(2, 2, -2, -2), 6, 6)
 
-            # 文字：方向名；不可用方向灰显
-            if is_active or is_current:
+            # 文字：当前方向用金色，悬浮用全亮米白，其余淡灰
+            if is_active:
                 text_color = QColor(232, 228, 217, 240)
+            elif is_current:
+                text_color = QColor(212, 175, 55, 220)
             elif is_avail:
-                text_color = QColor(232, 228, 217, 160)
+                text_color = QColor(232, 228, 217, 120)
             else:
-                text_color = QColor(90, 99, 110, 110)
+                text_color = QColor(90, 99, 110, 90)
             painter.setPen(QPen(text_color))
             painter.drawText(rect, Qt.AlignCenter, d)
 
@@ -493,29 +494,24 @@ class AnimView(QFrame):
         self._title.setStyleSheet("color: #96A1AD; font-size: 12px; letter-spacing: 1px;")
         outer.addWidget(self._title)
 
-        # 叠加容器：QStackedLayout(StackAll) 让 canvas 铺满，按钮矩阵浮于其左上
-        stack_host = QWidget()
-        self._stack_host = stack_host
-        stack_host.setStyleSheet("background: transparent;")
-        stack = QStackedLayout(stack_host)
-        stack.setStackingMode(QStackedLayout.StackAll)
+        # M35：按钮矩阵独立列（不再悬浮遮挡画布）——左 = 矩阵列 | 右 = 画布区
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(4)
 
-        # 底层：canvas 铺满整个区域
-        self._canvas = _AnimCanvas()
-        self._canvas.direction_overlay_clicked.connect(self.direction_overlay_clicked)
-        stack.addWidget(self._canvas)
-
-        # 上层：按钮矩阵容器（透明底，靠左悬浮）
+        # 左：方向/动作按钮矩阵容器（透明底，固定宽）。
+        # M35.1：不能加 Qt.AlignTop——对齐会退化为按 sizeHint 计算容器高度，
+        # 而 QScrollArea 的 sizeHint 在主窗口环境下会塌缩（实测 52px），
+        # 导致按钮列只剩标题+第一个按钮；由布局直接拉伸占满整列高度。
         self._matrix_container = QFrame()
         self._matrix_container.setAutoFillBackground(False)
         self._matrix_container.setStyleSheet(
             "QFrame, QWidget { background: transparent; border: none; }"
         )
         ml = QVBoxLayout(self._matrix_container)
-        ml.setContentsMargins(8, 4, 0, 0)
+        ml.setContentsMargins(0, 0, 2, 0)
         ml.setSpacing(0)
         self._matrix_container.setFixedWidth(LEFT_PANEL_WIDTH)
-        self._matrix_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Maximum)
 
         self._matrix_scroll = _MatrixScrollArea()
         self._matrix_scroll.setWidgetResizable(True)
@@ -527,26 +523,33 @@ class AnimView(QFrame):
             "QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }"
         )
         self._matrix_scroll.viewport().setAutoFillBackground(False)
-        ml.addWidget(self._matrix_scroll)
-        stack.addWidget(self._matrix_container)
-        # 按钮矩阵在上层，透出下层 canvas
-        self._matrix_container.raise_()
+        ml.addWidget(self._matrix_scroll, 1)
+        body.addWidget(self._matrix_container)
 
-        # 上层：右侧逐部件显隐 toggle（组视图用）。
-        # ⚠ 不能放进 stack：StackAll 模式下每个页都铺满全区，透明容器会整面
-        # 拦截鼠标事件（左侧按钮矩阵/画布 hover 全部失效）。改为 stack_host 的
-        # 手动定位悬浮子控件——不进布局，只占自身尺寸，其余区域点击不受影响。
-        self._toggles = PartToggles(stack_host)
+        # 右：canvas host——canvas 铺满；toggles / HUD 为手动定位悬浮子控件，
+        # 不进布局只占自身尺寸，其余区域点击不受影响。
+        canvas_host = QWidget()
+        self._stack_host = canvas_host
+        canvas_host.setStyleSheet("background: transparent;")
+        host_lay = QVBoxLayout(canvas_host)
+        host_lay.setContentsMargins(0, 0, 0, 0)
+        self._canvas = _AnimCanvas()
+        self._canvas.direction_overlay_clicked.connect(self.direction_overlay_clicked)
+        host_lay.addWidget(self._canvas)
+        canvas_host.installEventFilter(self)
+
+        # 右侧逐部件显隐 toggle（组视图用）
+        self._toggles = PartToggles(canvas_host)
         self._toggles.hide()
-        stack_host.installEventFilter(self)
 
-        # M32：HUD 信息面板（帧数账目），同模式悬浮于右下角；
+        # M32：HUD 信息面板（帧数账目），悬浮于右下角；
         # M32.1 紧凑/悬停展开高度变化 → 重新锚定右下角
-        self._hud = HUDPanel(stack_host)
+        self._hud = HUDPanel(canvas_host)
         self._hud.size_changed.connect(self._reposition_hud)
         self._hud.hide()
 
-        outer.addWidget(stack_host, 1)
+        body.addWidget(canvas_host, 1)
+        outer.addLayout(body, 1)
 
         # ---- 底部整行：控制条 ----
         bar = QHBoxLayout()
@@ -787,7 +790,8 @@ class AnimView(QFrame):
         max_h = host.height() - 8
         if n and tog.height() > max_h and max_h > 80:
             tog.setMaximumHeight(max_h)
-        x = max(LEFT_PANEL_WIDTH + 8, host.width() - tog.width() - 8)
+        # M35：host 已是纯画布区（不含左侧按钮列），右上角直接贴边
+        x = max(4, host.width() - tog.width() - 8)
         y = 4  # 右上角：紧贴顶部
         tog.move(x, y)
         tog.raise_()
