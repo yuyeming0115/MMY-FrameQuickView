@@ -234,6 +234,11 @@ class PartList(QFrame):
                 if grp.is_outfit:
                     # 套装组（M23）：显示父文件夹名（去 _部件 后缀）+ 套装标记，不查匹配表
                     header = f"{grp.display_name}（套装·{len(grp.parts)}件）"
+                elif grp.is_variant:
+                    # M36.1：worldboss 变体主项：`504004_世界BOSS · 黑龙王`
+                    cn = self._namemap.lookup(grp.parts[0].name, grp.res_id) \
+                        if (self._namemap and grp.parts) else None
+                    header = grp.display_name + (f" · {cn}" if cn else "")
                 else:
                     header = grp.res_id
                     if self._namemap:
@@ -270,9 +275,19 @@ class PartList(QFrame):
                         # 套装组跨 ID：子项 = `ID 中文`（如 501031005 武器影子）
                         label = f"{pd.res_id} {cn}"
                     else:
-                        label = pd.part if pd.part else "（整体资源）"
-                        if self._namemap:
-                            label = f"{label} · {cn}"
+                        if pd.part == "worldboss":
+                            # M36：变体组内子行只写「世界BOSS」（组头已含 ID 与中文名）；
+                            # 混编组（套装内）则补 ID 中文名区分
+                            if grp.is_variant:
+                                label = "世界BOSS"
+                            else:
+                                id_cn = self._namemap.lookup(pd.name, pd.res_id) \
+                                    if self._namemap else None
+                                label = f"世界BOSS · {id_cn}" if id_cn else "世界BOSS"
+                        else:
+                            label = pd.part if pd.part else "（整体资源）"
+                            if self._namemap:
+                                label = f"{label} · {cn}"
                     if pd.has_issues:
                         label += "  🔴"
                     elif self._fills_check and pd.has_warnings:

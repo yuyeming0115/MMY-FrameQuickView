@@ -342,7 +342,10 @@ class GridView(QFrame):
         self._build_cells()
         pixmaps.clear()
         self._pending = []
-        self._title.setText(f"A · 序列帧网格（{total} 帧 · {self._mode_text()}）")
+        # M36：整条序列全透明 → 标题标注空帧占位
+        all_blank = getattr(self._worker, "all_blank", False)
+        blank_seg = "⚠ 空帧占位 · " if all_blank else ""
+        self._title.setText(f"A · 序列帧网格（{total} 帧 · {blank_seg}{self._mode_text()}）")
 
     def _mode_text(self) -> str:
         """标题模式段：缩放模式 + 对齐模式（M34）。"""

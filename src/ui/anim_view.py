@@ -88,6 +88,8 @@ class _AnimCanvas(QLabel):
         self._pixmap: QPixmap | None = None
         self._checker = False
         self._cell = 16
+        # M36：空帧提示（当前序列全部为全透明占位图）→ 画布中央显示警示文字
+        self._blank_hint = False
 
         # 显向 overlay 状态
         self._overlay_enabled = False          # 「显向」toggle 控制；False 时鼠标事件完全透明
@@ -102,6 +104,12 @@ class _AnimCanvas(QLabel):
     def set_checker(self, enabled: bool) -> None:
         self._checker = enabled
         self.update()
+
+    def set_blank_hint(self, enabled: bool) -> None:
+        """M36：空帧提示开关——序列全透明时画布中央显示「⚠ 空帧」。"""
+        if self._blank_hint != enabled:
+            self._blank_hint = enabled
+            self.update()
 
     def set_dir_overlay_enabled(self, enabled: bool) -> None:
         """「显向」toggle：True 时鼠标 hover/拖拽可看到方向热区，False 时画布完全透明。"""
@@ -246,6 +254,22 @@ class _AnimCanvas(QLabel):
             x = (self.width() - self._pixmap.width()) // 2
             y = (self.height() - self._pixmap.height()) // 2
             painter.drawPixmap(x, y, self._pixmap)
+
+        # M36：空帧提示——全透明占位图序列，画布中央给出明确警示
+        if self._blank_hint and self._pixmap is not None:
+            text = "⚠ 空帧 · 图片全透明（占位图）"
+            font = painter.font()
+            font.setPixelSize(15)
+            painter.setFont(font)
+            fm = painter.fontMetrics()
+            tw = fm.horizontalAdvance(text) + 24
+            th = fm.height() + 12
+            rect = QRectF((self.width() - tw) / 2, (self.height() - th) / 2, tw, th)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(30, 32, 35, 225))
+            painter.drawRoundedRect(rect, 6, 6)
+            painter.setPen(QColor("#E79A9A"))
+            painter.drawText(rect, Qt.AlignCenter, text)
 
         # 显向 overlay：仅在「显向」开启 且 (hover 或 拖拽) 时绘制
         if self._overlay_enabled and (self._hover_dir or self._drag_origin is not None):
@@ -482,6 +506,7 @@ class AnimView(QFrame):
     direction_overlay_clicked = Signal(str)  # 画布内点击/拖拽某方向热区时发出（等同按钮矩阵的方向点击）
     fx_offset_changed = Signal(str, int, int)  # (part_key, dx, dy) 特效偏移微调
     hud_toggled = Signal(bool)  # M32：HUD 信息面板开关变化（上层持久化用）
+    layer_panel_toggled = Signal(bool)  # M36.2：显示层面板开关变化（上层持久化用）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -541,6 +566,7 @@ class AnimView(QFrame):
         # 右侧逐部件显隐 toggle（组视图用）
         self._toggles = PartToggles(canvas_host)
         self._toggles.hide()
+        self._toggles_active = False   # M36.2：是否处于组视图（面板数据已就绪）
 
         # M32：HUD 信息面板（帧数账目），悬浮于右下角；
         # M32.1 紧凑/悬停展开高度变化 → 重新锚定右下角
@@ -605,6 +631,20 @@ class AnimView(QFrame):
         self._hud_btn.toggled.connect(self._on_hud_toggled)
         bar.addWidget(self._hud_btn)
 
+        # M36.2：显示层面板开关（组视图右上角的部件显隐/穿戴面板；默认开，上层持久化）
+        self._layer_btn = QPushButton("☰ 显示层")
+        self._layer_btn.setCheckable(True)
+        self._layer_btn.setChecked(True)
+        self._layer_btn.setToolTip(
+            "显示层面板开关（组视图）：\n"
+            "收起/展开右上角的 部件显隐 + 穿戴特效/穿戴翅膀 面板"
+        )
+        self._layer_btn.setStyleSheet(
+            "QPushButton:checked { color: #D4AF37; border-color: #D4AF37; }"
+        )
+        self._layer_btn.toggled.connect(self._on_layer_toggled)
+        bar.addWidget(self._layer_btn)
+
         bar.addStretch(1)
         outer.addLayout(bar)
 
@@ -664,13 +704,39 @@ class AnimView(QFrame):
 
     def show_part_toggles(self, parts: dict[str, str], hidden: set[str]) -> None:
         """组视图：显示右侧逐部件显隐 toggle。parts = {part 名: 中文名}。"""
+        self._toggles_active = True
         self._toggles.set_parts(parts, hidden)
-        self._toggles.show()
-        self._reposition_toggles()
+        # M36.2：面板开关关闭时保持隐藏（数据已就绪，打开开关即显示）
+        if self._layer_btn.isChecked():
+            self._toggles.show()
+            self._reposition_toggles()
 
     def hide_part_toggles(self) -> None:
         """单部件视图/无选中：隐藏右侧 toggle 列表。"""
+        self._toggles_active = False
         self._toggles.hide()
+
+    def set_layer_panel_visible(self, visible: bool) -> None:
+        """M36.2：启动恢复显示层面板开关（不重复发信号）。"""
+        if self._layer_btn.isChecked() != visible:
+            self._layer_btn.blockSignals(True)
+            self._layer_btn.setChecked(visible)
+            self._layer_btn.blockSignals(False)
+        if self._toggles_active:
+            if visible and not self._toggles.isVisible():
+                self._toggles.show()
+                self._reposition_toggles()
+            elif not visible:
+                self._toggles.hide()
+
+    def _on_layer_toggled(self, visible: bool) -> None:
+        if self._toggles_active:
+            if visible:
+                self._toggles.show()
+                self._reposition_toggles()
+            else:
+                self._toggles.hide()
+        self.layer_panel_toggled.emit(visible)
 
     # ---------------- M32：HUD 信息面板 ----------------
     def update_hud(self, stats) -> None:
@@ -848,6 +914,7 @@ class AnimView(QFrame):
             self._labels = []
             self._index = 0
             self._canvas.set_frame(None)
+            self._canvas.set_blank_hint(False)
             self._play_btn.setChecked(False)
             self._play_btn.setText("▶ 播放")
             self._timer.stop()
@@ -857,6 +924,7 @@ class AnimView(QFrame):
         self._title.setText("B · GIF 动画预览 · 解码中…")
         self._pending_frames = []
         self._pending_labels = []
+        self._canvas.set_blank_hint(False)   # M36：新序列解码前清掉旧空帧提示
         # 存储特效层信息供键盘微调使用
         self._flat_mask = flat_mask or []
         self._fx_offsets = fx_offsets or {}
@@ -903,8 +971,12 @@ class AnimView(QFrame):
         self._labels = self._pending_labels
         self._pending_frames = []
         self._pending_labels = []
+        # M36：整条序列全透明 → 画布中央显示空帧警示，标题同步标注
+        all_blank = getattr(self._worker, "all_blank", False)
+        self._canvas.set_blank_hint(all_blank and bool(self._frames))
         align = "画布对齐" if self._canvas_align else "并集 bbox"
-        self._title.setText(f"B · GIF 动画预览（{total} 帧 · {align} · 防抖动）")
+        blank_seg = "⚠ 空帧占位 · " if all_blank else ""
+        self._title.setText(f"B · GIF 动画预览（{total} 帧 · {blank_seg}{align} · 防抖动）")
         if not self._frames:
             return
         resume_paused = self._resume_paused

@@ -23,6 +23,7 @@ PLACEHOLDER = "（待命名）"
 PART_CN_DEFAULT = {
     "hair": "头发", "body": "身体", "weapon": "武器", "wings": "翅膀",
     "shadow": "影子", "fills": "填充", "ride_front": "骑乘前", "ride_back": "骑乘后",
+    "worldboss": "世界BOSS",
 }
 
 

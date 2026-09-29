@@ -41,6 +41,8 @@ class PartData:
     character_type: str = ""               # protagonist / non_protagonist（归一化后）
     effective_type: str = ""               # 查漏实际使用的类型（覆盖 wings/mount/npc/空）
     missing_directions: list[str] = field(default_factory=list)
+    # 模板无期望动作、资源也没有的方向（如 worldboss 变体的 E/N/NW/S）→ 不适用（UI 灰显）
+    unexpected_directions: list[str] = field(default_factory=list)
     # 方向存在但「约定动作」缺失: {direction: [action, ...]}（按角色类型+方向基准）
     missing_actions: dict[str, list[str]] = field(default_factory=list)
     # 模板外多余动作: {direction: [action, ...]}（如旧工程的 catch/sprint）
@@ -82,18 +84,23 @@ class IdGroup:
     - ID 组：同 res_id 部件；key = res_id；组头显示由 part_list 查匹配表拼接
     - 套装组（M23）：同一父文件夹下跨 ID 部件；key = 父文件夹完整路径；
       display_name = 文件夹名去 `_部件` 后缀；res_id = body 部件的 ID
+    - 变体组（M36.1）：worldboss 变体独立成组（左栏主项）；key = 变体文件夹路径；
+      display_name = `{res_id}_世界BOSS`；组内仅 1 个 worldboss 部件
     """
     res_id: str
     parts: list[PartData] = field(default_factory=list)
     key: str = ""                             # 组唯一键（左栏选择/红点刷新/组查找用）
     is_outfit: bool = False                   # 是否套装组
-    display_name: str = ""                    # 套装组头显示名（ID 组为空）
+    is_variant: bool = False                  # M36.1：是否 worldboss 变体组（左栏主项）
+    display_name: str = ""                    # 套装/变体组头显示名（ID 组为空）
     # 配套异常：某部位缺失而组内其他部件拥有的 (direction, action)
     pairing_issues: list[str] = field(default_factory=list)
     # 按角色类型+方向基准的缺漏（组视图按钮矩阵/状态栏用）
     character_type: str = ""
     effective_type: str = ""               # 查漏实际使用的类型（覆盖 wings/mount/npc）
     missing_directions: list[str] = field(default_factory=list)
+    # 模板无期望动作、组内也没有的方向（worldboss 组专用）→ 不适用（UI 灰显）
+    unexpected_directions: list[str] = field(default_factory=list)
     missing_actions: dict[str, list[str]] = field(default_factory=dict)
     # 模板外多余动作（组内并集）: {direction: [action, ...]}
     extra_actions: dict[str, list[str]] = field(default_factory=dict)
@@ -341,6 +348,9 @@ def scan_part(folder: Path, tpl: Template, char_type_of=None) -> PartData | None
         part_type = "wings"
     elif part in ("ride_front", "ride_back"):
         part_type = "mount"
+    elif part == "worldboss":
+        # M36：worldboss 变体独立约定（模板 worldboss 规则，默认仅 SE×idle/attack/skill）
+        part_type = "worldboss"
     else:
         part_type = char_type
         if char_type == tpl.default_character_type:
@@ -365,6 +375,15 @@ def scan_part(folder: Path, tpl: Template, char_type_of=None) -> PartData | None
         if miss:
             missing_actions_[d] = miss
 
+    # M36：worldboss 变体只对「模板有期望动作的方向」查漏；其余方向缺失 = 不适用
+    # （灰显），不算红色缺失；变体意外拥有某方向则正常显示、不标任何状态。
+    unexpected_directions: list[str] = []
+    if part_type == "worldboss":
+        expected_dirs = [d for d in tpl.directions if tpl.expected_actions("worldboss", d)]
+        missing_directions = [d for d in expected_dirs if d not in matrix]
+        unexpected_directions = [d for d in tpl.directions
+                                 if d not in expected_dirs and d not in matrix]
+
     if part == "fills":
         warning_directions = [d for d in tpl.directions if d not in matrix]
         warning_actions = {d: a for d, a in missing_actions_.items() if a}
@@ -379,7 +398,9 @@ def scan_part(folder: Path, tpl: Template, char_type_of=None) -> PartData | None
     return PartData(
         folder=folder, res_id=res_id, part=part, matrix=matrix,
         character_type=char_type, effective_type=part_type,
-        missing_directions=missing_directions, missing_actions=missing_actions,
+        missing_directions=missing_directions,
+        unexpected_directions=unexpected_directions,
+        missing_actions=missing_actions,
         extra_actions=extra_actions,
     )
 
@@ -503,12 +524,20 @@ def _find_part_units(root: Path, tpl: Template, max_depth: int) -> list[tuple[Pa
 
 def _group_parts(parts: list[PartData], tpl: Template, char_type_of=None,
                  outfit_by_parent: dict[Path, list[PartData]] | None = None) -> list[IdGroup]:
-    """分组：套装单元优先（M23），其余按 res_id 分组；并计算组级缺漏 + 配套校验。"""
+    """分组：套装单元优先（M23），worldboss 变体独立成组（M36.1），其余按 res_id 分组。
+
+    变体组（M36.1）：worldboss 不并入同 ID 组当子项，而是各自成为左栏主项
+    （组头 `{id}_世界BOSS · 中文名`），查漏按 worldboss 规则独立进行。
+    """
     outfit_members = {id(pd) for members in (outfit_by_parent or {}).values() for pd in members}
     by_id: dict[str, list[PartData]] = {}
+    wb_singles: list[PartData] = []
     for p in parts:
         if id(p) in outfit_members:
             continue    # 套装组部件不重复进 ID 组
+        if p.part == "worldboss":
+            wb_singles.append(p)    # M36.1：变体独立成组，不进同 ID 组
+            continue
         by_id.setdefault(p.res_id, []).append(p)
 
     groups: list[IdGroup] = []
@@ -531,6 +560,19 @@ def _group_parts(parts: list[PartData], tpl: Template, char_type_of=None,
 
     for parent, members in (outfit_by_parent or {}).items():
         groups.append(_build_outfit_group(parent, members, tpl))
+
+    for p in wb_singles:
+        grp = IdGroup(res_id=p.res_id, parts=[p])
+        raw_type = char_type_of(p.res_id) if char_type_of else None
+        grp.character_type = (tpl.resolve_char_type(raw_type) if raw_type
+                              else (tpl.infer_char_type(p.res_id, [p.part])
+                                    or tpl.default_character_type))
+        grp.key = str(p.folder)
+        grp.is_variant = True
+        grp.display_name = f"{p.res_id}_世界BOSS"
+        grp.category = tpl.classify(p.res_id, [p.part])
+        _finalize_group(grp, tpl)
+        groups.append(grp)
 
     groups.sort(key=lambda g: g.display_name or g.key)
     return groups
@@ -569,23 +611,29 @@ def _finalize_group(grp: IdGroup, tpl: Template) -> None:
     if grp.is_flat:
         grp.effective_type = "flat"
         return
-    # 组级方向/动作缺漏：以「组内所有部件并集拥有」为参照，对照类型×方向基准
-    # 部位类型覆盖：组内所有部件都是 wings → wings 规则；都是 ride_* → mount 规则
+    # M36：worldboss 是独立变体（不是 shadow 那类叠层配套件），不参与组级并集/
+    # 查漏/类型判定——否则其 SE 动作会掩盖主体的组级查漏、纯 ID 组会被误报异常。
+    # 组内只有 worldboss（该 ID 无主体）时，才以 worldboss 为查漏主体。
+    core_members = [p for p in members if p.part != "worldboss"]
+    members_eff = core_members or members
+    # 组级方向/动作缺漏：以「查漏主体部件并集拥有」为参照，对照类型×方向基准
     owned_dirs: set[str] = set()
     owned_per_dir: dict[str, set[str]] = {}
-    for p in members:
+    for p in members_eff:
         for d, col in p.matrix.items():
             owned_dirs.add(d)
             owned_per_dir.setdefault(d, set()).update(col.keys())
     grp.missing_directions = [d for d in tpl.directions if d not in owned_dirs]
-    # 判定组级查漏类型：排除 shadow/fills（配套部件，不参与类型判定）
-    # 非 shadow/fills 部件全 wings → wings；全 ride_* → mount；
+    # 判定组级查漏类型：排除 shadow/fills/worldboss（配套部件与独立变体，不参与类型判定）
+    # 非 shadow/fills 部件全 wings → wings；全 ride_* → mount；全 worldboss → worldboss；
     # 否则用 char_type，但若 char_type=default 且组内无任何战斗/坐骑动作 → NPC 兜底。
-    type_parts = [p.part for p in members if p.part not in ("shadow", "fills", None)]
+    type_parts = [p.part for p in members_eff if p.part not in ("shadow", "fills", None)]
     if type_parts and all(pt == "wings" for pt in type_parts):
         group_type = "wings"
     elif type_parts and all(pt in ("ride_front", "ride_back") for pt in type_parts):
         group_type = "mount"
+    elif type_parts and all(pt == "worldboss" for pt in type_parts):
+        group_type = "worldboss"
     else:
         group_type = grp.character_type
         if grp.character_type == tpl.default_character_type:
@@ -597,6 +645,13 @@ def _finalize_group(grp: IdGroup, tpl: Template) -> None:
             if not (owned_all & combat) and not (owned_all & ride):
                 group_type = "npc"
     grp.effective_type = group_type
+    # M36：worldboss 组——模板无期望动作、组内也没有的方向 → 不适用（灰显）非红缺失
+    grp.unexpected_directions = []
+    if group_type == "worldboss":
+        expected_dirs = [d for d in tpl.directions if tpl.expected_actions("worldboss", d)]
+        grp.missing_directions = [d for d in expected_dirs if d not in owned_dirs]
+        grp.unexpected_directions = [d for d in tpl.directions
+                                     if d not in expected_dirs and d not in owned_dirs]
     grp.missing_actions = {}
     for d in tpl.directions:
         if d in grp.missing_directions:
@@ -605,17 +660,18 @@ def _finalize_group(grp: IdGroup, tpl: Template) -> None:
         miss = [a for a in expected if a not in owned_per_dir.get(d, set())]
         if miss:
             grp.missing_actions[d] = miss
-    # 组级多余动作：组内各部件 extra_actions 的并集
+    # 组级多余动作：查漏主体各部件 extra_actions 的并集（worldboss 变体不计入）
     grp.extra_actions = {}
     extra_per_dir: dict[str, set[str]] = {}
-    for p in members:
+    for p in members_eff:
         for d, acts in p.extra_actions.items():
             extra_per_dir.setdefault(d, set()).update(acts)
     for d, acts in extra_per_dir.items():
         grp.extra_actions[d] = sorted(acts)
     # 组级 fills 警告：组内存在主体部件，但整组无 fills → 缺 fills（警告级）
-    # 特效层（flat）不进基准：虚拟方向「特效」不算「缺 fills」的方向。
-    non_fill_parts = [p for p in members if p.part != "fills" and not p.is_flat]
+    # 特效层（flat）与 worldboss 变体不进基准（无 fills 惯例）。
+    non_fill_parts = [p for p in members_eff
+                      if p.part != "fills" and not p.is_flat and p.part != "worldboss"]
     fills_parts = [p for p in members if p.part == "fills"]
     if non_fill_parts and not fills_parts:
         nf_dirs: set[str] = set()
@@ -640,7 +696,8 @@ def _check_pairing(members: list[PartData]) -> list[str]:
     否则会把全组误报成配套异常。
     """
     issues: list[str] = []
-    members = [p for p in members if not p.is_flat]
+    # worldboss 变体（M36）不参与配套：它是独立渲染变体，不要求与主体动作对齐
+    members = [p for p in members if not p.is_flat and p.part != "worldboss"]
     if len(members) < 2:
         return issues
     # 以组内所有部件的并集为参照
