@@ -6,7 +6,11 @@
 - **查漏补缺**：检测文件夹结构是否符合模板规范（缺方向/缺动作/帧号断档）
 - **GIF动画效果检验**：动态播放帧序列，可调速、逐帧步进
 - **同ID部件叠层**：同 ID 的多部件（如 `50103101_shadow` + `50103101_weapon`）可叠层显示，
-  shadow 固定最底层，用于检查资源是否配套正确（**不做**跨 ID 自由搭配组合）
+  shadow 固定最底层，用于检查资源是否配套正确
+- **跨ID形象组合（M37）**：匹配表中文名去掉尾部类型词（模板 `look_types`，默认
+  武器/职业/时装/发）后前缀相同的不同 ID 组（如「天命·男〔剑〕时装/发/武器」）
+  自动组合叠显——选中任一组，显示层带出同形象全部部件（含各自影子），可逐个关停；
+  特效/世界BOSS变体/套装组不参与，无匹配表时行为不变
 
 ## 技术栈
 
@@ -109,7 +113,7 @@ E:\Temp\天命装\50152101_body
 ### 规则模板系统
 
 - 模板为 JSON 文件，存于 `templates/` 目录，程序启动时自动扫描
-- 字段：`name`、`folder_pattern`（`{id}(_{part})?`，部位后缀可选）、`parts`、`directions`、`actions`、`hierarchy`、`layer_order`、`frame_pattern`、`extensions`、`outfit_merge_max`（套装合并阈值，默认 16）
+- 字段：`name`、`folder_pattern`（`{id}(_{part})?`，部位后缀可选）、`parts`、`directions`、`actions`、`hierarchy`、`layer_order`、`frame_pattern`、`extensions`、`outfit_merge_max`（套装合并阈值，默认 16）、`look_types`（M37 跨 ID 形象组合类型词，默认 武器/职业/时装/发；缺省=功能关闭）
 - 顶栏可切换模板 + 进入编辑；针对不同项目各存一份模板
 
 ### 部件选择（拖入父级文件夹时）
