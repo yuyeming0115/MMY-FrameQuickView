@@ -118,7 +118,8 @@ class MainWindow(QMainWindow):
         # QSettings 记忆，用户开过则保持其选择）
         self._fills_check = bool(self._settings.value("checks/fills", False, type=bool))
         # M34：固定画布对齐模式（跨视图角色位置不漂移；QSettings 记忆）
-        self._canvas_align = bool(self._settings.value("display/canvas_align", False, type=bool))
+        # M39 起默认开：部件/穿戴均按原始渲染画布对齐，开启是更符合直觉的基准
+        self._canvas_align = bool(self._settings.value("display/canvas_align", True, type=bool))
         # M36：空帧抽样缓存 {选中项key: {(方向,动作)}}（会话级内存缓存，二次选中零 IO）
         self._blank_cache: dict[str, set] = {}
         self._blank_workers: list[_BlankCheckWorker] = []
@@ -286,7 +287,7 @@ class MainWindow(QMainWindow):
         central.installEventFilter(self)
 
     # ---------------- 行为 ----------------
-    def _on_folder_dropped(self, folder: Path) -> None:
+    def _on_folder_dropped(self, folder: Path, auto: bool = False) -> None:
         if self._tpl is None:
             self.statusBar().showMessage("⚠ 无可用模板（templates/ 为空）")
             return
@@ -316,6 +317,13 @@ class MainWindow(QMainWindow):
         if saved_sel:
             self.part_list._select_by_key(saved_sel)
         self._hidden_parts = set(self._settings.value("layering/hidden_parts", [], type=list))
+        # M39：左栏按最长条目自适应加宽（只加宽不收窄），默认完整展示名字。
+        # 自动重扫（auto=True）不触发——避免覆盖用户手动拖窄的宽度。
+        if not auto:
+            w = self.part_list.preferred_width()
+            sizes = self._splitter.sizes()
+            if w and w > sizes[0]:
+                self._splitter.setSizes([w, max(1, sum(sizes) - w)])
         if not self._result.parts:
             self.statusBar().showMessage(
                 f"ℹ 未识别到符合模板的部件文件夹（忽略 {len(self._result.ignored)} 项）"
@@ -462,7 +470,7 @@ class MainWindow(QMainWindow):
         paused = not self.anim_view._play_btn.isChecked()
         idx = self.anim_view._index
         root = self._result.root
-        self._on_folder_dropped(root)
+        self._on_folder_dropped(root, auto=True)
         if key:
             self.part_list._select_by_key(key)      # 已删除则保持默认第一项
         if self._part is not None or self._group is not None:
