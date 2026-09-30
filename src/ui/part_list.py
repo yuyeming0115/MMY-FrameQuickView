@@ -51,7 +51,7 @@ class PartList(QFrame):
         self._namemap: NameMap | None = None
         self._result: ScanResult | None = None
         self._loading = False                    # 防止 itemChanged 递归
-        self._fills_check = True                 # fills 警告检测开关（关闭=不显示 🟠）
+        self._fills_check = False                # M37 起默认关（🟠 降噪）；启动时 app 会同步实际值
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)

@@ -20,6 +20,7 @@
     {"name": "NPC", "id_prefix": ["505"]}
   ],
   "default_character_type": "non_protagonist",
+  "look_types": ["武器", "职业", "时装", "发"],
   "action_rules": {
     "protagonist": {
       "E": ["idle", "run", "ride_idle", "ride_run"],

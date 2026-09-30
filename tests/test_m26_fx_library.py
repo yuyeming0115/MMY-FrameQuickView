@@ -106,7 +106,7 @@ try:
 
     # ---- 3) part_keys 与 layers 同序 ----
     assert len(keys) == len(layers) == len(flat_mask), "layers/flat_mask/part_keys 长度须一致"
-    expect = [win._toggle_key(p, ga) for p in ga.parts]
+    expect = [win._toggle_key(p, ga.parts) for p in ga.parts]
     assert keys[:3] == expect, f"前 3 层应对齐组内部件: {keys[:3]} != {expect}"
     assert keys[-1] == "50105101", f"末位应为特效名: {keys[-1]}"
     print(f"[3] OK 顺序一致: keys={keys}")

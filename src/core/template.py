@@ -32,6 +32,10 @@ class Template:
     categories: list[dict] = field(default_factory=list)
     # 套装组合并阈值：同父文件夹下跨 ID 部件数 ≤ 该值才合并为套装组（防大库误合并）。
     outfit_merge_max: int = 16
+    # M37 跨 ID 形象组合：匹配表中文名里的「类型词」表（如 武器/职业/时装/发）。
+    # 中文名去掉类型词及其后缀 = 形象前缀，前缀相同的不同 ID 组自动组合叠显；
+    # 空/缺省 = 功能关闭（行为与旧版一致）。
+    look_types: list[str] = field(default_factory=list)
 
     # 角色类型归一化：匹配表第3列 → action_rules 的 key。
     # 主角类 → protagonist；伙伴/怪物/boss → non_protagonist；
@@ -108,6 +112,26 @@ class Template:
     def category_names(self) -> list[str]:
         return [c.get("name", "") for c in self.categories if c.get("name")]
 
+    def look_split(self, cn: str) -> tuple[str, str] | None:
+        """中文名 → (形象前缀, 类型词)；无类型词命中（或前缀为空）返回 None。
+
+        M37：在名字里找类型词的**最后一次**出现（兼容「武器0阶」这类带尾缀的名），
+        同位置取更长的词（防「发」截胡「时装」这类包含关系——当前词表互不包含，
+        这里是防御性规则）。
+        """
+        best: tuple[str, int] | None = None
+        for word in self.look_types:
+            if not word:
+                continue
+            pos = cn.rfind(word)
+            if pos <= 0:
+                continue          # 前缀为空 / 未命中
+            if best is None or pos > best[1] or (pos == best[1] and len(word) > len(best[0])):
+                best = (word, pos)
+        if best is None:
+            return None
+        return cn[:best[1]].strip(), best[0]
+
     # ---------- 解析辅助 ----------
     def frame_regex(self) -> re.Pattern:
         return re.compile(self.frame_pattern, re.IGNORECASE)
@@ -158,6 +182,7 @@ class Template:
             "default_character_type": self.default_character_type,
             "categories": self.categories,
             "outfit_merge_max": self.outfit_merge_max,
+            "look_types": self.look_types,
         }
 
     @classmethod
@@ -176,6 +201,7 @@ class Template:
             default_character_type=data.get("default_character_type", "non_protagonist"),
             categories=list(data.get("categories", [])),
             outfit_merge_max=int(data.get("outfit_merge_max", 16)),
+            look_types=list(data.get("look_types", [])),
         )
 
 
