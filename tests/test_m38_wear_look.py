@@ -105,11 +105,14 @@ def main():
             print("== 2. 穿戴武器 → 叠层 3+2，QSettings 记忆 ==")
             win._on_look_dressed("weapon", "501031001")
             _settle(app, win)
-            layers, _fm, _off, keys = win._layers_for_current()
+            layers, fm, _off, keys = win._layers_for_current()
             assert len(layers) == 5, f"穿戴后应 5 层（3 显示 + 武器+影子）: {len(layers)}"
             assert "501031001_weapon" in keys and "501031001_shadow" in keys, f"part_keys: {keys}"
+            # 穿戴层必须是普通层语义（flat=False）：部件与主体同画布渲染，按原始
+            # 坐标叠加才与手上位置对齐；特效层语义（居中）会把武器挪离手（实测 bug）
+            assert fm[-2:] == [False, False], f"穿戴层应 flat=False: {fm}"
             assert settings.value("layering/dressed_weapon/501112101", "", type=str) == "501031001"
-            print(f"  ✓ 5 层 {keys}")
+            print(f"  ✓ 5 层 {keys}（flat=False 原始画布对齐）")
 
             print("== 3. 武器组：可反向穿戴时装，武器槽位隐藏 ==")
             win.part_list._select_by_key("GRP:501031001")

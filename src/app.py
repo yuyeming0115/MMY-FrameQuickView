@@ -818,18 +818,22 @@ class MainWindow(QMainWindow):
 
     def _append_dressed_look(self, layers, flat_mask, fx_offsets, part_keys,
                              display: list[PartData], direction, action) -> None:
-        """M38：把穿戴的形象组部件追加为层（原地修改；取帧方式同翅膀，居中对齐）。"""
+        """M38：把穿戴的形象组部件追加为层（原地修改；取帧方式同翅膀）。
+
+        ⚠ flat_mask 必须为 False（普通层语义）：这些部件与主体出自**同一张渲染
+        画布**（如 875×875），按原始画布坐标叠加才与手上位置对齐。若走特效层
+        语义（flat=True，按层自身并集框居中），武器会被强制挪到画布中心而脱手
+        ——实测 2026-09-29（昆仑剑侠武器穿到天命时装，画布对齐开关均无法补救）。
+        """
         for p in self._dressed_look_parts(display):
             ad = p.action_data(direction, action)
             if ad is None:
                 ad = next((a for col in p.matrix.values() for a in col.values()), None)
             if ad is None or not ad.frames:
                 continue
-            idx = len(layers)
             layers.append(ad.frames)
-            flat_mask.append(True)
+            flat_mask.append(False)
             part_keys.append(p.name)
-            fx_offsets[idx] = self._get_fx_offset(p.name)
 
     def _on_look_dressed(self, slot: str, look_key: str) -> None:
         """M38：穿戴/脱下时装/头发/武器 → 按当前组 key 记忆并刷新。"""
