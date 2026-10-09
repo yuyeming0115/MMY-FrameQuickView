@@ -51,7 +51,7 @@ class PartList(QFrame):
         self._namemap: NameMap | None = None
         self._result: ScanResult | None = None
         self._loading = False                    # 防止 itemChanged 递归
-        self._fills_check = True                 # fills 警告检测开关（关闭=不显示 🟠）
+        self._fills_check = False                # M37 起默认关（🟠 降噪）；启动时 app 会同步实际值
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -147,6 +147,25 @@ class PartList(QFrame):
         header = self.tree.header()
         if header.sectionSize(0) != new_w:
             header.resizeSection(0, new_w)
+
+    def preferred_width(self) -> int | None:
+        """M39：按当前最长条目估算左栏理想宽度（含内边距），供 app 自适应加宽。
+
+        仅估算组头/子项文本宽度（emoji 等宽字符可能略低估，padding 已留余量）；
+        结果夹在 [最小宽, 面板最大宽] 区间。无数据返回 None。
+        """
+        if self._result is None:
+            return None
+        fm = self.tree.fontMetrics()
+        longest = 0
+        for i in range(self.tree.topLevelItemCount()):
+            grp_item = self.tree.topLevelItem(i)
+            longest = max(longest, fm.horizontalAdvance(grp_item.text(0)))
+            for j in range(grp_item.childCount()):
+                longest = max(longest, fm.horizontalAdvance(grp_item.child(j).text(0)))
+        if longest <= 0:
+            return None
+        return max(LIST_COL_MIN_WIDTH, min(self.maximumWidth(), longest + LIST_COL_PADDING))
 
     # ---------------- 数据 ----------------
     def set_namemap(self, namemap: NameMap) -> None:
