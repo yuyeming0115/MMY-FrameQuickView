@@ -129,6 +129,7 @@ def _img_to_pixmap(img) -> QPixmap:
 class _FrameCell(QFrame):
     """单个帧格：图片居中 + 底部帧名标签，固定尺寸保证对齐。"""
     clicked = Signal(int)
+    copied = Signal(str)
 
     # 样式常量（与 B 区按钮风格一致）
     _LABEL_H = 18          # 底部标签高度
@@ -139,12 +140,18 @@ class _FrameCell(QFrame):
         self._idx = idx
         self._pix: QPixmap | None = None
         self._orig_pix: QPixmap | None = None   # 原图（未缩放），自适应模式按此重算
+        self._image = None                      # PIL.Image 原图
         self._label_text = ""
         self._cell_size: QSize | None = None  # 统一格子尺寸（含标签）
         self.setStyleSheet(
-            "background: transparent; border: 1px solid transparent; border-radius: 3px;"
+            "_FrameCell { background: transparent; border: 1px solid transparent; border-radius: 4px; }"
+            "_FrameCell:hover { background: rgba(212, 175, 55, 0.08); border-color: rgba(212, 175, 55, 0.3); }"
         )
         self.setMouseTracking(True)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def set_image(self, img) -> None:
+        self._image = img
 
     def set_pixmap(self, pix: QPixmap) -> None:
         self._pix = pix
@@ -173,8 +180,41 @@ class _FrameCell(QFrame):
         self._pix = scaled
         self.update()
 
+    def contextMenuEvent(self, event) -> None:
+        """右键上下文菜单：复制当前帧原图（支持去透明边缘与保留透明通道）。"""
+        if self._image is None:
+            return
+        from PySide6.QtWidgets import QMenu
+        from ..core.clipboard_util import copy_image_to_clipboard
+
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background: #2A2E33; color: #E8E4D9; border: 1px solid #3A3F46; padding: 4px; border-radius: 4px; }"
+            "QMenu::item { padding: 6px 18px; font-size: 14px; border-radius: 2px; }"
+            "QMenu::item:selected { background: #D4AF37; color: #1E2023; font-weight: bold; }"
+            "QMenu::separator { height: 1px; background: #3A3F46; margin: 4px 6px; }"
+        )
+
+        act_crop = menu.addAction(f"📋 复制原图 (去透明边缘 · {self._label_text})")
+        font = act_crop.font()
+        font.setBold(True)
+        act_crop.setFont(font)
+
+        act_full = menu.addAction(f"📋 复制原图 (完整原尺寸 · {self._label_text})")
+
+        action = menu.exec(event.globalPos())
+        if action == act_crop:
+            ok, msg, (w, h) = copy_image_to_clipboard(self._image, crop_transparent=True)
+            if ok:
+                self.copied.emit(f"已复制第 {self._label_text} 帧有效原图 ({w}×{h}) 到剪贴板，可直接在 PS 中粘贴")
+        elif action == act_full:
+            ok, msg, (w, h) = copy_image_to_clipboard(self._image, crop_transparent=False)
+            if ok:
+                self.copied.emit(f"已复制第 {self._label_text} 帧完整画布 ({w}×{h}) 到剪贴板，可直接在 PS 中粘贴")
+
     def mouseReleaseEvent(self, event) -> None:
-        self.clicked.emit(self._idx)
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self._idx)
         super().mouseReleaseEvent(event)
 
     def paintEvent(self, event) -> None:
@@ -214,6 +254,7 @@ class _FrameCell(QFrame):
 
 class GridView(QFrame):
     frame_clicked = Signal(int)
+    frame_copied = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -335,8 +376,8 @@ class GridView(QFrame):
             max_w = max(max_w, pix.width())
             max_h = max(max_h, pix.height())
 
-        # 保存解码结果，供「原图/自适应」切换重算
-        self._loaded = [(pixmaps[i], label, idx) for i, (idx, _img, label) in enumerate(self._pending)]
+        # 保存解码结果，供「原图/自适应」切换重算（保留原 PIL.Image 供右键导出）
+        self._loaded = [(pixmaps[i], label, idx, img) for i, (idx, img, label) in enumerate(self._pending)]
         self._max_w, self._max_h = max_w, max_h
 
         self._build_cells()
@@ -366,12 +407,14 @@ class GridView(QFrame):
             cell_w = self._max_w + 2 * _FrameCell._PAD
             cell_h = self._max_h + 2 * _FrameCell._PAD + _FrameCell._LABEL_H
             cell_size = QSize(cell_w, cell_h)
-            for pix, label, idx in self._loaded:
+            for pix, label, idx, img in self._loaded:
                 cell = _FrameCell(idx)
+                cell.set_image(img)
                 cell.set_pixmap(pix)
                 cell.set_label(label)
                 cell.set_cell_size(cell_size)
                 cell.clicked.connect(lambda i=idx: self.frame_clicked.emit(i))
+                cell.copied.connect(self.frame_copied.emit)
                 self._flow.addWidget(cell)
                 self._cells.append(cell)
 
@@ -417,13 +460,15 @@ class GridView(QFrame):
         cell_size = QSize(int(cell_w), int(cell_h))
         img_area_pw = int(img_w)
         img_area_ph = int(img_h)
-        for pix, label, idx in self._loaded:
+        for pix, label, idx, img in self._loaded:
             cell = _FrameCell(idx)
+            cell.set_image(img)
             cell.set_pixmap(pix)  # 存原图
             cell.set_label(label)
             cell.set_cell_size(cell_size)
             cell.rescale_pixmap(img_area_pw, img_area_ph)  # 按比例缩放显示
             cell.clicked.connect(lambda i=idx: self.frame_clicked.emit(i))
+            cell.copied.connect(self.frame_copied.emit)
             self._flow.addWidget(cell)
             self._cells.append(cell)
 

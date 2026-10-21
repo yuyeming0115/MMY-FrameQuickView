@@ -246,6 +246,7 @@ class MainWindow(QMainWindow):
         panes.setHandleWidth(4)
         self.grid_view = GridView()
         self.grid_view.frame_clicked.connect(self._on_grid_frame_clicked)
+        self.grid_view.frame_copied.connect(lambda msg: self.statusBar().showMessage(msg, 4000))
         self.anim_view = AnimView()
         # 方向/动作按钮矩阵注入 B 区画布与控制栏之间
         self.matrix = ButtonMatrix()
@@ -292,6 +293,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("⚠ 无可用模板（templates/ 为空）")
             return
         self._last_folder = folder
+        from .core.atlas import clear_atlas_cache
+        clear_atlas_cache()
         self._result = scan_root(folder, self._tpl, char_type_of=self._namemap.char_type)
         # M26：全局特效库——所有 flat 特效，无论物理位置（套装目录内 / 最外层
         # 独立文件夹），供任意套装穿戴，无需复制到每个套装目录。

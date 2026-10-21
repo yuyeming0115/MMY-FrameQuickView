@@ -18,9 +18,45 @@ from .template import Template
 @dataclass
 class ActionData:
     """单个 方向×动作 的帧数据。"""
-    frames: list[Path] = field(default_factory=list)   # 按帧号排序
+    _frames: list = field(default_factory=list)        # 按帧号排序
     numbers: list[int] = field(default_factory=list)
     gaps: list[int] = field(default_factory=list)      # min→max 内缺失的帧号
+    plist_path: Path | None = None                     # 图集模式下的 plist 路径（惰性加载帧）
+
+    def __init__(
+        self,
+        frames: list | None = None,
+        numbers: list[int] | None = None,
+        gaps: list[int] | None = None,
+        plist_path: Path | None = None,
+    ):
+        self._frames = list(frames) if frames else []
+        self.numbers = list(numbers) if numbers else []
+        self.gaps = list(gaps) if gaps else []
+        self.plist_path = plist_path
+
+    @property
+    def frames(self) -> list:
+        if self.plist_path is not None and not self._frames:
+            from .atlas import parse_plist_frames
+            self._frames = parse_plist_frames(self.plist_path)
+            # 同步更新 numbers 与 gaps，保证断档检测与 HUD 账目有效
+            nums = []
+            for f in self._frames:
+                m = re.search(r"(\d+)", getattr(f, "stem", str(f)))
+                if m:
+                    nums.append(int(m.group(1)))
+            self.numbers = sorted(nums)
+            if self.numbers:
+                present = set(self.numbers)
+                self.gaps = [n for n in range(self.numbers[0], self.numbers[-1] + 1) if n not in present]
+            else:
+                self.gaps = []
+        return self._frames
+
+    @frames.setter
+    def frames(self, val: list) -> None:
+        self._frames = list(val)
 
     @property
     def count(self) -> int:
@@ -421,11 +457,15 @@ def scan_root(root: Path, tpl: Template, char_type_of=None, max_depth: int = 6) 
     - 拖入角色文件夹（如 拓跋影(双刀)）：递归一层找到其下部件。
     - 拖入根目录（如 新ID）：递归找到 角色/部件 全部。
     - 拖入套装父文件夹（如 …_部件 / 新ID\天命女(琴)）：跨 ID 部件合并为一个套装组（M23）。
+    - 拖入 TexturePacker 平铺图集目录（M40）：直接走 scan_atlas_root 秒级解析。
 
     关键：scan_part 一律用「真实完整路径」调用，绝不用 root/部件名 重新拼接，
     避免把 角色/部件 错拼成 根/部件（导致后台解码时文件不存在）。
     """
     root = Path(root)
+    from .atlas import is_atlas_root
+    if is_atlas_root(root):
+        return scan_atlas_root(root, tpl, char_type_of)
     # 情况1：拖入的本身就是部件文件夹
     single = scan_part(root, tpl, char_type_of)
     if single is not None:
@@ -718,3 +758,162 @@ def _check_pairing(members: list[PartData]) -> list[str]:
                 (" …" if len(missing) > 3 else "")
             )
     return issues
+
+
+def scan_atlas_root(root: Path, tpl: Template, char_type_of=None) -> ScanResult:
+    """平铺图集目录专用扫描器（Cocos2d-x / local-role 等结构）。
+
+    毫秒级极速扫描：仅依据文件名正则匹配聚合成 PartData，扫描阶段绝不解析任何 plist 文件。
+    """
+    root = Path(root)
+    result = ScanResult(root=root)
+    if not root.is_dir():
+        return result
+
+    from .atlas import parse_atlas_filename
+
+    dir_actions_by_part: dict[tuple[str, str | None], dict[str, dict[str, Path]]] = {}
+    flat_by_part: dict[tuple[str, str | None], list[Path]] = {}
+
+    try:
+        entries = sorted(root.iterdir(), key=lambda p: p.name)
+    except OSError:
+        return result
+
+    for entry in entries:
+        if not entry.is_file() or entry.suffix.lower() != ".plist":
+            continue
+        parsed = parse_atlas_filename(entry.name)
+        if parsed is None:
+            continue
+        res_id, part, direction, action, _ext = parsed
+        key = (res_id, part)
+        if direction is not None and action is not None:
+            dir_actions_by_part.setdefault(key, {}).setdefault(direction, {})[action] = entry
+        else:
+            flat_by_part.setdefault(key, []).append(entry)
+
+    # 1. 常规方向/动作部件
+    for (res_id, part), dirs in dir_actions_by_part.items():
+        folder_name = f"{res_id}_{part}" if part else res_id
+        folder = root / folder_name
+
+        matrix: dict[str, dict[str, ActionData]] = {}
+        for d, acts in dirs.items():
+            for a, plist_p in acts.items():
+                matrix.setdefault(d, {})[a] = ActionData(plist_path=plist_p)
+
+        raw_type = char_type_of(res_id) if char_type_of else None
+        if raw_type:
+            char_type = tpl.resolve_char_type(raw_type)
+        else:
+            char_type = tpl.infer_char_type(res_id, [part]) or tpl.default_character_type
+
+        # fills 警告级特殊处理（对齐 scan_part）
+        if part == "fills":
+            warning_dirs = [d for d in tpl.directions if d not in matrix]
+            warning_acts = {}
+            for d in tpl.directions:
+                if d in matrix:
+                    act_names = set(matrix[d].keys())
+                    expected = tpl.expected_actions(char_type, d)
+                    miss = [a for a in expected if a not in act_names]
+                    if miss:
+                        warning_acts[d] = miss
+            pd = PartData(
+                folder=folder,
+                res_id=res_id,
+                part=part,
+                matrix=matrix,
+                character_type=char_type,
+                effective_type=char_type,
+                missing_directions=[],
+                missing_actions={},
+                extra_actions={},
+                warning_directions=warning_dirs,
+                warning_actions=warning_acts,
+            )
+            result.parts.append(pd)
+            continue
+
+        if part in ("shadow", "fills"):
+            part_type = ""
+        elif part == "wings":
+            part_type = "wings"
+        elif part in ("ride_front", "ride_back"):
+            part_type = "mount"
+        elif part == "worldboss":
+            part_type = "worldboss"
+        else:
+            part_type = char_type
+            if char_type == tpl.default_character_type:
+                owned_actions: set[str] = set()
+                for col in matrix.values():
+                    owned_actions.update(col.keys())
+                combat = {"attack", "skill", "hurt", "block", "dead"}
+                ride = {"ride_idle", "ride_run"}
+                if not (owned_actions & combat) and not (owned_actions & ride):
+                    part_type = "npc" 
+
+        missing_directions: list[str] = []
+        unexpected_directions: list[str] = []
+        if part_type == "worldboss":
+            expected_dirs = [d for d in tpl.directions if tpl.expected_actions("worldboss", d)]
+            missing_directions = [d for d in expected_dirs if d not in matrix]
+            unexpected_directions = [d for d in tpl.directions if d not in expected_dirs and d not in matrix]
+        else:
+            missing_directions = [d for d in tpl.directions if d not in matrix]
+
+        missing_actions: dict[str, list[str]] = {}
+        extra_actions: dict[str, list[str]] = {}
+        for d in tpl.directions:
+            if d not in matrix:
+                continue
+            act_names = set(matrix[d].keys())
+            expected = tpl.expected_actions(part_type, d)
+            missing = [a for a in expected if a not in act_names]
+            if missing:
+                missing_actions[d] = missing
+            extras = [a for a in act_names if a not in expected and a not in tpl.actions]
+            if extras:
+                extra_actions[d] = extras
+
+        pd = PartData(
+            folder=folder,
+            res_id=res_id,
+            part=part,
+            matrix=matrix,
+            character_type=char_type,
+            effective_type=part_type,
+            missing_directions=missing_directions,
+            unexpected_directions=unexpected_directions,
+            missing_actions=missing_actions,
+            extra_actions=extra_actions,
+        )
+        result.parts.append(pd)
+
+    # 2. 扁平特效部件
+    for (res_id, part), plists in flat_by_part.items():
+        folder_name = f"{res_id}_{part}" if part else res_id
+        folder = root / folder_name
+        matrix: dict[str, dict[str, ActionData]] = {}
+        virtual_dir = "特效"
+        for plist_p in plists:
+            stem = plist_p.stem
+            matrix.setdefault(virtual_dir, {})[stem] = ActionData(plist_path=plist_p)
+
+        pd = PartData(
+            folder=folder,
+            res_id=res_id,
+            part=part,
+            matrix=matrix,
+            character_type="",
+            effective_type="",
+            is_flat=True,
+        )
+        result.parts.append(pd)
+
+    result.groups = _group_parts(result.parts, tpl, char_type_of)
+    result.fx_library = [p for p in result.parts if p.is_flat]
+    result.wing_library = [p for p in result.parts if p.part == "wings"]
+    return result
