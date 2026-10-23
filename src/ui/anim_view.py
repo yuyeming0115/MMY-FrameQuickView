@@ -995,7 +995,8 @@ class AnimView(QFrame):
     # ---------------- 内部 ----------------
     def _stop_worker(self) -> None:
         if self._worker is not None and self._worker.isRunning():
-            self._worker.quit()
+            # M41：可中断解码——快速切换时不必等旧序列解码完（wait 会阻塞主线程）
+            self._worker.requestInterruption()
             self._worker.wait()
         self._worker = None
 

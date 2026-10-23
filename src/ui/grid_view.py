@@ -12,11 +12,14 @@ import math
 import numpy as np
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QPoint, QSize, QRect, Signal
+from PySide6.QtCore import (
+    Qt, QPoint, QSize, QRect, Signal, QTimer, QPropertyAnimation, QEasingCurve,
+    QAbstractAnimation,
+)
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QLayout, QLayoutItem, QPushButton,
-    QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
+    QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLayout, QLayoutItem,
+    QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from .hover_scroll import enable_hover_scroll
@@ -310,6 +313,19 @@ class GridView(QFrame):
         # 解码完成后保存，供「原图/自适应」切换重算用
         self._loaded: list[tuple[QPixmap, str, int]] = []  # (pixmap, label, idx)
         self._max_w = self._max_h = 0  # 原图最大尺寸
+        # M41：切换丝滑化——重建合并 / 就地刷新 / 淡入过渡
+        self._building = False                       # 防 resize 与解码完成互相触发递归重建
+        self._build_sig: tuple | None = None          # 布局签名（相同则只换像素不重建控件）
+        self._rebuild_timer = QTimer(self)
+        self._rebuild_timer.setSingleShot(True)
+        self._rebuild_timer.setInterval(40)           # 合并连续 resize 事件（滚动条抖动）
+        self._rebuild_timer.timeout.connect(lambda: self._build_cells())
+        self._fade_overlay: QLabel | None = None
+        self._fade_anim: QPropertyAnimation | None = None
+        # M41：固定最小宽度——自适应模式下格子尺寸由视口宽反推，若让
+        # minimumSizeHint 随格子尺寸浮动，横向 splitter 会在每次切换时重新
+        # 分配 A/B 宽度（实测 441↔496 反复跳动 55px），锁死下限即可根治。
+        self.setMinimumWidth(240)
 
     def show_sequence(
         self,
@@ -341,8 +357,13 @@ class GridView(QFrame):
         self._worker.start()
 
     def _stop_worker(self) -> None:
+        """停止上一轮解码。
+
+        M41：先 `requestInterruption()` 再 wait——worker 在逐帧循环里检查中断标志，
+        快速连点左栏时不必等旧序列全部解码完（原实现纯 wait 会卡住 UI 线程）。
+        """
         if self._worker is not None and self._worker.isRunning():
-            self._worker.quit()
+            self._worker.requestInterruption()
             self._worker.wait()
         self._worker = None
 
@@ -361,9 +382,13 @@ class GridView(QFrame):
     def _on_done(self, total: int) -> None:
         if self._worker is None or self.sender() is not self._worker:
             return
+        # M41：换内容前先给旧画面拍快照，新内容就位后叠一层淡出遮罩，
+        # 把「整块替换」的瞬间突变掩盖掉（帧数/尺寸不同也不会有跳动感）。
+        snapshot = self._snapshot()
         self._clear_cells()
         if not self._pending:
             self._title.setText("A · 序列帧网格（无帧）")
+            self._build_sig = None
             return
 
         # 计算统一格子尺寸：取所有帧最大宽高 + 标签高度 + 内边距
@@ -380,13 +405,14 @@ class GridView(QFrame):
         self._loaded = [(pixmaps[i], label, idx, img) for i, (idx, img, label) in enumerate(self._pending)]
         self._max_w, self._max_h = max_w, max_h
 
-        self._build_cells()
+        self._build_cells(force=True)
         pixmaps.clear()
         self._pending = []
         # M36：整条序列全透明 → 标题标注空帧占位
         all_blank = getattr(self._worker, "all_blank", False)
         blank_seg = "⚠ 空帧占位 · " if all_blank else ""
         self._title.setText(f"A · 序列帧网格（{total} 帧 · {blank_seg}{self._mode_text()}）")
+        self._fade_from(snapshot)
 
     def _mode_text(self) -> str:
         """标题模式段：缩放模式 + 对齐模式（M34）。"""
@@ -394,34 +420,80 @@ class GridView(QFrame):
         align = "画布对齐" if self._canvas_align else "并集 bbox"
         return f"{mode} · {align}"
 
-    def _build_cells(self) -> None:
-        """根据当前模式（原图/自适应）构建所有 cell。"""
-        self._clear_cells()
-        if not self._loaded:
-            return
-        if self._mode_btn.isChecked():
-            # 自适应模式：按视口宽度算 4 列的格子尺寸，图片缩放适应
-            self._apply_fit_layout()
-        else:
-            # 原图模式：100% 原尺寸
-            cell_w = self._max_w + 2 * _FrameCell._PAD
-            cell_h = self._max_h + 2 * _FrameCell._PAD + _FrameCell._LABEL_H
-            cell_size = QSize(cell_w, cell_h)
-            for pix, label, idx, img in self._loaded:
-                cell = _FrameCell(idx)
-                cell.set_image(img)
-                cell.set_pixmap(pix)
-                cell.set_label(label)
-                cell.set_cell_size(cell_size)
-                cell.clicked.connect(lambda i=idx: self.frame_clicked.emit(i))
-                cell.copied.connect(self.frame_copied.emit)
-                self._flow.addWidget(cell)
-                self._cells.append(cell)
+    def _build_cells(self, force: bool = False) -> None:
+        """根据当前模式（原图/自适应）构建或刷新所有 cell。
 
-    def _apply_fit_layout(self) -> None:
-        """自适应模式：根据帧数和 A 区宽高动态算行列，所有帧一屏全显，格子最大化。"""
-        if not self._loaded:
+        M41：重建 = 销毁全部控件 + 新建，代价大且会引起一次整体重排。因此：
+        - `force=True`（新序列解码完成 / 切换原图↔自适应）必重建；
+        - 仅尺寸类变化（resize、滚动条抖动）且布局签名未变 → **就地换像素**，控件不动，
+          视觉上完全无跳动；
+        - 用 `_building` 挡掉重建过程中再次触发的 resize 递归。
+        """
+        if self._building:
             return
+        if not self._loaded:
+            self._clear_cells()
+            self._build_sig = None
+            return
+        vp = self._scroll.viewport()
+        sig = (
+            self._mode_btn.isChecked(), len(self._loaded), self._max_w, self._max_h,
+            vp.width(), vp.height(),
+        )
+        if not force and sig == self._build_sig and len(self._cells) == len(self._loaded):
+            self._refresh_cells_in_place()
+            return
+        self._build_sig = sig
+        self._building = True
+        try:
+            self._viewport.setUpdatesEnabled(False)   # 重建期间不刷新，避免中间态闪现
+            self._clear_cells()
+            if self._mode_btn.isChecked():
+                self._apply_fit_layout()             # 自适应模式：格子按视口最大化
+            else:
+                cell_w = self._max_w + 2 * _FrameCell._PAD
+                cell_h = self._max_h + 2 * _FrameCell._PAD + _FrameCell._LABEL_H
+                cell_size = QSize(cell_w, cell_h)
+                for pix, label, idx, img in self._loaded:
+                    self._add_cell(idx, img, pix, label, cell_size)
+        finally:
+            self._viewport.setUpdatesEnabled(True)
+            self._viewport.update()
+            self._building = False
+
+    def _add_cell(self, idx, img, pix, label, cell_size: QSize) -> _FrameCell:
+        cell = _FrameCell(idx)
+        cell.set_image(img)
+        cell.set_pixmap(pix)
+        cell.set_label(label)
+        cell.set_cell_size(cell_size)
+        cell.clicked.connect(lambda i=idx: self.frame_clicked.emit(i))
+        cell.copied.connect(self.frame_copied.emit)
+        self._flow.addWidget(cell)
+        self._cells.append(cell)
+        return cell
+
+    def _refresh_cells_in_place(self) -> None:
+        """布局签名未变：只把新像素/帧名换进现有 cell，不重建控件、不重排。"""
+        fit = self._fit_layout() if self._mode_btn.isChecked() else None
+        for cell, (pix, label, _idx, img) in zip(self._cells, self._loaded):
+            if fit is not None and cell.size() != fit[0]:
+                cell.set_cell_size(fit[0])
+            cell.set_image(img)
+            cell.set_pixmap(pix)
+            cell.set_label(label)
+            if fit is not None:
+                cell.rescale_pixmap(fit[1], fit[2])
+            cell.update()
+
+    def _fit_layout(self) -> tuple[QSize, int, int] | None:
+        """算自适应模式的最优格子布局 → (格子尺寸, 图片显示宽, 图片显示高)。
+
+        遍历可行列数，找让格子图片显示最大化的方案；
+        约束：rows = ceil(N/cols)，总高 <= avail_h，保持原图比例不变形。
+        """
+        if not self._loaded:
+            return None
         N = len(self._loaded)
         margin = 8
         h_spacing = 6
@@ -430,13 +502,11 @@ class GridView(QFrame):
         avail_w = self._scroll.viewport().width() - 2 * margin
         avail_h = self._scroll.viewport().height() - 2 * margin
         if avail_w < 100 or avail_h < 100:
-            return
+            return None
 
         # 原图宽高比（所有帧并集 bbox 后尺寸应一致，取 max 兜底）
         ratio = (self._max_w / self._max_h) if self._max_h > 0 else 1.0
 
-        # 遍历可行列数，找让格子图片显示最大化的方案
-        # 约束：rows = ceil(N/cols)，总高 <= avail_h，保持原图比例不变形
         best = None  # (img_w, cols, rows, img_area_w, img_area_h, cell_w, cell_h)
         for cols in range(1, N + 1):
             rows = math.ceil(N / cols)
@@ -452,38 +522,77 @@ class GridView(QFrame):
             if best is None or img_w > best[0]:
                 best = (img_w, cols, rows, img_area_w, img_area_h, cell_w, cell_h)
         if best is None:
-            return
-        _, cols, rows, img_area_w, img_area_h, cell_w, cell_h = best
+            return None
+        _, _cols, _rows, img_area_w, img_area_h, cell_w, cell_h = best
         # 实际图片显示尺寸（保持比例，居中于格子）
         img_w = min(img_area_w, img_area_h * ratio)
         img_h = img_w / ratio
-        cell_size = QSize(int(cell_w), int(cell_h))
-        img_area_pw = int(img_w)
-        img_area_ph = int(img_h)
+        return QSize(int(cell_w), int(cell_h)), int(img_w), int(img_h)
+
+    def _apply_fit_layout(self) -> None:
+        """自适应模式：按帧数和 A 区宽高动态算行列，所有帧一屏全显，格子最大化。"""
+        fit = self._fit_layout()
+        if fit is None:
+            return
+        cell_size, img_w, img_h = fit
         for pix, label, idx, img in self._loaded:
-            cell = _FrameCell(idx)
-            cell.set_image(img)
-            cell.set_pixmap(pix)  # 存原图
-            cell.set_label(label)
-            cell.set_cell_size(cell_size)
-            cell.rescale_pixmap(img_area_pw, img_area_ph)  # 按比例缩放显示
-            cell.clicked.connect(lambda i=idx: self.frame_clicked.emit(i))
-            cell.copied.connect(self.frame_copied.emit)
-            self._flow.addWidget(cell)
-            self._cells.append(cell)
+            cell = self._add_cell(idx, img, pix, label, cell_size)
+            cell.rescale_pixmap(img_w, img_h)  # 按比例缩放显示
 
     def _on_mode_toggled(self, checked: bool) -> None:
         """切换原图/自适应。"""
         self._mode_btn.setText("原图" if checked else "自适应")
         if self._loaded:
-            self._build_cells()
+            self._build_cells(force=True)
             self._title.setText(
                 f"A · 序列帧网格（{len(self._loaded)} 帧 · {self._mode_text()}）")
 
+    # ---------------- M41：切换过渡（快照 + 淡出遮罩） ----------------
+    def _snapshot(self) -> QPixmap | None:
+        """给当前 A 区画面拍快照（用于换内容时的淡出过渡）；无内容返回 None。"""
+        if not self._cells or not self._scroll.isVisible():
+            return None
+        self._clear_fade_overlay()          # 上一轮遮罩若还在，先撤掉再拍，避免叠影
+        pix = self._scroll.grab()
+        return pix if not pix.isNull() else None
+
+    def _fade_from(self, pix: QPixmap | None) -> None:
+        """把旧画面盖在新内容上做 150ms 淡出 → 切换看起来是「溶解」而非「跳变」。"""
+        if pix is None or pix.isNull():
+            return
+        self._clear_fade_overlay()
+        overlay = QLabel(self._scroll)
+        overlay.setPixmap(pix)
+        overlay.setGeometry(self._scroll.rect())
+        overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        overlay.setStyleSheet("background: transparent; border: none;")
+        effect = QGraphicsOpacityEffect(overlay)
+        effect.setOpacity(1.0)
+        overlay.setGraphicsEffect(effect)
+        overlay.show()
+        overlay.raise_()
+        anim = QPropertyAnimation(effect, b"opacity", overlay)
+        anim.setDuration(150)
+        anim.setStartValue(1.0)
+        anim.setEndValue(0.0)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.finished.connect(self._on_fade_finished)
+        anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._fade_overlay = overlay
+        self._fade_anim = anim
+
+    def _on_fade_finished(self) -> None:
+        self._clear_fade_overlay()
+
+    def _clear_fade_overlay(self) -> None:
+        if self._fade_overlay is not None:
+            self._fade_overlay.hide()
+            self._fade_overlay.deleteLater()
+            self._fade_overlay = None
+        self._fade_anim = None
+
     def resizeEvent(self, event) -> None:
-        """视口宽度变化时，自适应模式重算布局。"""
+        """视口尺寸变化时，自适应模式重算布局（合并 40ms 内的连续 resize）。"""
         super().resizeEvent(event)
         if self._mode_btn.isChecked() and self._loaded:
-            # 用 _build_cells 而非 _apply_fit_layout：前者会先 _clear_cells，
-            # 避免 resize 反复触发导致 cell 无限累积。
-            self._build_cells()
+            self._rebuild_timer.start()

@@ -41,6 +41,9 @@ C:\Users\EDY\.workbuddy\binaries\python\versions\3.13.12\python.exe -m venv .ven
 
 启动后拖入部件文件夹 / 父级目录（或点顶栏快捷目录 chip）即可。
 
+> 💡 常用目录可点顶栏「📌 常驻」按钮固定：常驻项排在最前，永远不会被新的历史记录挤掉
+> （也可右键任意 chip →「📌 设为常驻」）。
+
 ## 运行测试
 
 tests/ 下均为独立脚本（非 pytest），逐个用 venv Python 运行：

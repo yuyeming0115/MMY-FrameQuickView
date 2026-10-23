@@ -62,6 +62,9 @@ class DecodeWorker(QThread):
         bbox_cache: dict[Path, tuple | None] = {}
         size_cache: dict[Path, tuple[int, int]] = {}
         for p in all_paths:
+            # M41：切走时立刻放弃，别让上一轮解码把 UI 线程卡住（wait 会阻塞主线程）
+            if self.isInterruptionRequested():
+                return
             try:
                 b, sz = frame_info(p)
             except (FileNotFoundError, OSError, ValueError):
@@ -130,6 +133,8 @@ class DecodeWorker(QThread):
         n = max((len(layer) for layer in self._layers), default=0)
         # 各层独立循环：短序列用取模回绕（8帧角色循环播放）
         for i in range(n):
+            if self.isInterruptionRequested():      # M41：已被切走 → 直接放弃本轮
+                return
             per = [
                 (
                     layer[i % len(layer)]

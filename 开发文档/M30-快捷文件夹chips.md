@@ -55,8 +55,26 @@
 - **细节**：路径比较用 `str(folder) == str(current)`（同一来源记录，无需大小写归一）；
   `set_current_folder` 与 `_record_quick_folder` 的 chips 重建顺序无关紧要——重建也读 `_current_folder`。
 
+## M41 追加：升级为「📌 常驻」（2026-10-23）
+
+> 详见 `开发文档/M41-切换丝滑化与常驻文件夹.md`
+
+**动因**：M30 的「★ 固定为收藏」只能右键发现，且收藏上限 8 个，新增收藏会把最旧的挤掉——
+与「常驻/固定」的语义（永远别被冲掉）冲突。
+
+- **一级入口**：拖拽区右侧新增「📌 常驻」开关按钮，一键常驻/取消常驻**当前目录**；
+  常驻时金底深字、未加载目录时灰显禁用（tooltip 说明「不会被新的历史记录挤掉」）。
+- **chip 外观**：常驻 chip = `📌` 前缀 + 金边金字，恒排最前；右键菜单改为
+  「📌 设为常驻（不被新历史挤掉）」/「📌 取消常驻」/「🗑 从列表移除」。
+- **淘汰规则**：常驻项不占「最近」名额（`QUICK_RECENT_MAX=5` 只作用于历史），
+  常驻上限 `QUICK_PIN_MAX=30` **只挡新增、绝不自动挤掉已有常驻**（超限状态栏提示）。
+- **存储迁移**：QSettings 键 `folders/favs` → `folders/pins`，旧收藏数据自动继承；
+  判断用 `contains()`（`type=list` 缺失键返回 `[]` 而非 `None`）。
+- **代码**：`_quick_favs` → `_quick_pins`、`_on_quick_star_toggled` → `_on_quick_pin_toggled`、
+  信号 `quick_folder_star_toggled` → `quick_folder_pin_toggled`（新增 `pin_current_toggled`）。
+
 ## 后续可扩展
 
 - chip 支持中文名显示（复用匹配表）；
 - ⚙ ID 菜单加「清空最近」入口；
-- 拖拽区 chips 过多时换行（当前 收藏8+最近5 上限内单行可容纳）。
+- 拖拽区 chips 过多时换行（当前 常驻30+最近5 上限内单行可容纳，超宽时由窗口宽度截断）。
