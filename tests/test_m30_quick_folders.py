@@ -23,6 +23,7 @@ from PIL import Image
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
+import src.app as appmod
 from src.app import MainWindow
 from src.core.template import load_templates
 
@@ -51,9 +52,12 @@ def main():
     a, b, c = tmp / "50112151_a", tmp / "50112151_b", tmp / "50112151_c"
     fa, fb, fc = tmp / "50112151_f", tmp / "50112151_b", tmp / "50112151_c"
 
-    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp / "settings"))
-    QSettings.setDefaultFormat(QSettings.IniFormat)
-    S = lambda: QSettings("MMY", "FrameQuickView")
+    # 隔离 QSettings：本机 QSettings(org, app) 总是落到注册表，直接测试会
+    # 读写/清空用户真实配置——统一重定向到临时 ini（放在被扫描目录之外，
+    # 避免写入设置触发目录监听形成重扫风暴）。
+    ini = str(Path(tempfile.mkdtemp()) / "app.ini")
+    S = lambda: QSettings(ini, QSettings.Format.IniFormat)
+    appmod.QSettings = lambda *a, **k: QSettings(ini, QSettings.Format.IniFormat)
     S().clear()
 
     w = MainWindow()
@@ -65,7 +69,6 @@ def main():
     assert w._quick_recents == [str(b), str(a)], f"最近应为[b,a]: {w._quick_recents}"
     w._on_folder_dropped(a)
     assert w._quick_recents == [str(a), str(b)], "重复拖入应提到最前"
-    assert chips(w.drop) == ["★ " + a.name if False else a.name, b.name] or True
     assert len(chips(w.drop)) == 2, f"chips 数应为 2: {chips(w.drop)}"
 
     # 2) 上限 5：连拖 5 个后最早被挤掉（b 被 a..f 挤出）
@@ -74,26 +77,26 @@ def main():
     assert len(w._quick_recents) == 5 and str(b) not in w._quick_recents, \
         f"最近应只留 5 个且 b 被挤掉: {w._quick_recents}"
 
-    # 3) 星标 b → 收藏=[b]，b 不再占用最近名额；再拖 b 最近不变
-    w._on_quick_star_toggled(b, True)
-    assert w._quick_favs == [str(b)] and str(b) not in w._quick_recents
+    # 3) 📌 常驻 b → 常驻=[b]，b 不再占用最近名额；再拖 b 最近不变
+    w._on_quick_pin_toggled(b, True)
+    assert w._quick_pins == [str(b)] and str(b) not in w._quick_recents
     w._on_folder_dropped(b)
-    assert str(b) not in w._quick_recents and w._quick_favs == [str(b)], "收藏拖入不应进最近"
-    assert chips(w.drop)[0] == "★ " + b.name, f"收藏 chip 应金标在前: {chips(w.drop)}"
+    assert str(b) not in w._quick_recents and w._quick_pins == [str(b)], "常驻拖入不应进最近"
+    assert chips(w.drop)[0] == "📌 " + b.name, f"常驻 chip 应置顶并带 📌: {chips(w.drop)}"
 
     # 4) 点击最近 chip a → 切换扫描该目录
     w._on_quick_folder_clicked(a)
     assert w._result.root == a, f"点击 chip 应切换到 a: {w._result.root}"
     assert a.name in w.drop._label.text(), "拖拽区应显示当前目录"
 
-    # 5) 取消收藏 → 回到最近最前
-    w._on_quick_star_toggled(b, False)
-    assert w._quick_favs == [] and w._quick_recents[0] == str(b)
+    # 5) 取消常驻 → 回到最近最前
+    w._on_quick_pin_toggled(b, False)
+    assert w._quick_pins == [] and w._quick_recents[0] == str(b)
 
-    # 6) 移除 a → 收藏/最近同时消失
-    w._on_quick_star_toggled(a, True)
+    # 6) 移除 a → 常驻/最近同时消失
+    w._on_quick_pin_toggled(a, True)
     w._on_quick_removed(a)
-    assert str(a) not in w._quick_favs and str(a) not in w._quick_recents
+    assert str(a) not in w._quick_pins and str(a) not in w._quick_recents
 
     # 7) 点击已不存在的目录 → 警告不崩溃，扫描结果不变
     ghost = tmp / "50112151_ghost"

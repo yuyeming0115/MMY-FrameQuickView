@@ -16,12 +16,14 @@ from PIL import Image
 BBox = tuple[int, int, int, int]  # (left, top, right, bottom)，PIL crop 语义
 
 
-def frame_info(path: Path) -> tuple[BBox | None, tuple[int, int]]:
+def frame_info(path: Path | object) -> tuple[BBox | None, tuple[int, int]]:
     """单帧 alpha 有效像素包围盒 + 原始画布尺寸（一次解码同时返回）。
 
-    M34 固定画布对齐模式需要画布尺寸；与 frame_bbox 共用一次解码，
-    避免调用方（DecodeWorker 双缓存）重复打开文件。
+    - 若为 AtlasFrame：直接返回预存的 (canvas_bbox, canvas_size)，零文件 IO。
+    - 若为普通 Path：解码并计算 alpha bbox 与画布尺寸。
     """
+    if hasattr(path, "canvas_bbox") and hasattr(path, "canvas_size"):
+        return path.canvas_bbox, path.canvas_size
     with Image.open(path) as im:
         size = (im.width, im.height)
         rgba = np.asarray(im.convert("RGBA"))
@@ -141,7 +143,10 @@ def composite_layers(
         lb = _get_bbox(p)
         if lb is None:
             continue
-        im = Image.open(p).convert("RGBA").crop(lb)
+        if hasattr(p, "get_cropped_image"):
+            im = p.get_cropped_image()
+        else:
+            im = Image.open(p).convert("RGBA").crop(lb)
 
         if flat_mask and idx < len(flat_mask) and flat_mask[idx]:
             # 特效层：以「该层跨帧并集 bbox」为锚点整体居中，帧间保持原始相对位置。

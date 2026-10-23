@@ -36,18 +36,23 @@ class DecodeWorker(QThread):
         self.all_blank = False
 
     def run(self) -> None:
+        def _is_valid_frame(item) -> bool:
+            if hasattr(item, "is_file"):
+                return bool(item.is_file())
+            return Path(item).is_file()
+
         # 收集所有路径
-        all_paths: list[Path] = []
+        all_paths: list = []
         for layer in self._layers:
             for p in layer:
-                if p and Path(p).is_file():
+                if p and _is_valid_frame(p):
                     all_paths.append(p)
 
         if not all_paths:
             self.finished.emit(0)
             return
 
-        missing_count = sum(1 for layer in self._layers for p in layer if p and not Path(p).is_file())
+        missing_count = sum(1 for layer in self._layers for p in layer if p and not _is_valid_frame(p))
         if missing_count:
             print(f"[DecodeWorker] 跳过 {missing_count} 个不存在的帧文件", file=sys.stderr)
 
@@ -57,6 +62,9 @@ class DecodeWorker(QThread):
         bbox_cache: dict[Path, tuple | None] = {}
         size_cache: dict[Path, tuple[int, int]] = {}
         for p in all_paths:
+            # M41：切走时立刻放弃，别让上一轮解码把 UI 线程卡住（wait 会阻塞主线程）
+            if self.isInterruptionRequested():
+                return
             try:
                 b, sz = frame_info(p)
             except (FileNotFoundError, OSError, ValueError):
@@ -125,6 +133,8 @@ class DecodeWorker(QThread):
         n = max((len(layer) for layer in self._layers), default=0)
         # 各层独立循环：短序列用取模回绕（8帧角色循环播放）
         for i in range(n):
+            if self.isInterruptionRequested():      # M41：已被切走 → 直接放弃本轮
+                return
             per = [
                 (
                     layer[i % len(layer)]
@@ -146,7 +156,7 @@ class DecodeWorker(QThread):
                 label = self._labels[i]
             else:
                 label = next(
-                    (Path(p).stem for p in per if p is not None),
+                    (p.stem if hasattr(p, "stem") else Path(p).stem for p in per if p is not None),
                     f"{i + 1:04d}",
                 )
             self.frame_ready.emit(i, img, label)

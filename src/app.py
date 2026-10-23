@@ -123,8 +123,8 @@ class MainWindow(QMainWindow):
         # M36：空帧抽样缓存 {选中项key: {(方向,动作)}}（会话级内存缓存，二次选中零 IO）
         self._blank_cache: dict[str, set] = {}
         self._blank_workers: list[_BlankCheckWorker] = []
-        # M30：快捷文件夹（收藏 + 最近拖入），QSettings 持久化
-        self._quick_favs: list[str] = []
+        # M30/M41：快捷文件夹（常驻 + 最近拖入），QSettings 持久化
+        self._quick_pins: list[str] = []
         self._quick_recents: list[str] = []
         # 重启兜底：上次的匹配表/拖入目录如果还存在，自动恢复
         saved = self._load_saved_map_path()
@@ -171,10 +171,11 @@ class MainWindow(QMainWindow):
         self.drop.pick_namemap_requested.connect(self._pick_map_file)
         self.drop.auto_refresh_act.setChecked(self._auto_refresh)
         self.drop.auto_refresh_toggled.connect(self._on_auto_refresh_toggled)
-        # M30：快捷文件夹 chips（点击切换 / 星标收藏 / 移除）
+        # M30/M41：快捷文件夹 chips（点击切换 / 📌 常驻 / 移除）
         self.drop.quick_folder_clicked.connect(self._on_quick_folder_clicked)
-        self.drop.quick_folder_star_toggled.connect(self._on_quick_star_toggled)
+        self.drop.quick_folder_pin_toggled.connect(self._on_quick_pin_toggled)
         self.drop.quick_folder_removed.connect(self._on_quick_removed)
+        self.drop.pin_current_toggled.connect(self._on_quick_pin_toggled)
         top.addWidget(self.drop, 1)  # 占满左侧
         top.addSpacing(8)
         top.addWidget(QLabel("模板"))
@@ -246,6 +247,7 @@ class MainWindow(QMainWindow):
         panes.setHandleWidth(4)
         self.grid_view = GridView()
         self.grid_view.frame_clicked.connect(self._on_grid_frame_clicked)
+        self.grid_view.frame_copied.connect(lambda msg: self.statusBar().showMessage(msg, 4000))
         self.anim_view = AnimView()
         # 方向/动作按钮矩阵注入 B 区画布与控制栏之间
         self.matrix = ButtonMatrix()
@@ -277,7 +279,14 @@ class MainWindow(QMainWindow):
         saved_splitter = self._settings.value("layout/splitter", None)
         saved_panes = self._settings.value("layout/panes", None)
         splitter.setSizes([int(x) for x in saved_splitter] if saved_splitter else [220, 1060])
-        panes.setSizes([int(x) for x in saved_panes] if saved_panes else [600, 480])
+        panes_sizes = [int(x) for x in saved_panes] if saved_panes else [600, 480]
+        # M41：A 区最小宽度锁定（不再被 minimumSizeHint 顶宽）后，历史上被挤到极窄的
+        # 保存值会原样生效 → A 区窄到看不清帧。占比低于 32% 时按 40% 兜底。
+        if len(panes_sizes) == 2 and sum(panes_sizes) > 0:
+            total = sum(panes_sizes)
+            if panes_sizes[0] < total * 0.32:
+                panes_sizes = [int(total * 0.4), total - int(total * 0.4)]
+        panes.setSizes(panes_sizes)
 
         root.addWidget(splitter, 1)
         self.setCentralWidget(central)
@@ -292,6 +301,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("⚠ 无可用模板（templates/ 为空）")
             return
         self._last_folder = folder
+        from .core.atlas import clear_atlas_cache
+        clear_atlas_cache()
         self._result = scan_root(folder, self._tpl, char_type_of=self._namemap.char_type)
         # M26：全局特效库——所有 flat 特效，无论物理位置（套装目录内 / 最外层
         # 独立文件夹），供任意套装穿戴，无需复制到每个套装目录。
@@ -302,6 +313,7 @@ class MainWindow(QMainWindow):
         self._wing_by_key = {p.name: p for p in self._wing_library}
         self.drop.set_current(str(folder))
         self.drop.set_current_folder(folder)   # M31：chip 激活态高亮当前目录
+        self.drop.set_pinned(str(folder) in self._quick_pins)   # M41：常驻按钮状态
         self._setup_namemap(folder)
         self.part_list.set_namemap(self._namemap)
         # 先清空上一轮选择状态，再重建列表：load_result 会自动选中第一项并同步
@@ -331,12 +343,12 @@ class MainWindow(QMainWindow):
         self._setup_dir_watcher(folder)
         self._record_quick_folder(folder)
 
-    # ---------------- M30：快捷文件夹（收藏 + 最近） ----------------
-    QUICK_RECENT_MAX = 5     # 最近列表上限（收藏不计入、不被挤掉）
-    QUICK_FAV_MAX = 8        # 收藏上限
+    # ---------------- M30/M41：快捷文件夹（📌 常驻 + 最近） ----------------
+    QUICK_RECENT_MAX = 5     # 最近列表上限（常驻不计入、不被挤掉）
+    QUICK_PIN_MAX = 30       # 常驻上限（只挡新增，绝不自动挤掉已有常驻）
 
     def _load_quick_folders(self) -> None:
-        """从 QSettings 读收藏/最近列表；已不存在的目录自动剔除。
+        """从 QSettings 读常驻/最近列表；已不存在的目录自动剔除。
 
         注意：QSettings `type=list` 对单元素列表返回 str 而非 list（Qt 特性），
         必须先归一化，否则只剩 1 个目录时会被逐字符过滤成空。
@@ -345,29 +357,36 @@ class MainWindow(QMainWindow):
             if v is None:
                 return []
             return [v] if isinstance(v, str) else list(v)
-        favs = [p for p in norm(self._settings.value("folders/favs", [], type=list))
-                if Path(p).is_dir()]
+        # M41：键名由 folders/favs（旧「收藏」）迁移为 folders/pins，旧数据自动继承。
+        # 注意 type=list 时缺失键会返回 []（不是 None），必须用 contains 判断存在性。
+        if self._settings.contains("folders/pins"):
+            raw_pins = self._settings.value("folders/pins", [], type=list)
+        else:
+            raw_pins = self._settings.value("folders/favs", [], type=list)
+        pins = [p for p in norm(raw_pins) if Path(p).is_dir()]
         recents = [p for p in norm(self._settings.value("folders/recents", [], type=list))
-                   if Path(p).is_dir() and p not in favs]
-        self._quick_favs = favs
+                   if Path(p).is_dir() and p not in pins]
+        self._quick_pins = pins
         self._quick_recents = recents
         self._refresh_quick_chips()
 
     def _refresh_quick_chips(self) -> None:
         self.drop.set_quick_folders(
-            [Path(p) for p in self._quick_favs],
+            [Path(p) for p in self._quick_pins],
             [Path(p) for p in self._quick_recents],
         )
+        cur = str(self._last_folder) if self._last_folder is not None else ""
+        self.drop.set_pinned(bool(cur) and cur in self._quick_pins)
 
     def _save_quick_folders(self) -> None:
-        self._settings.setValue("folders/favs", self._quick_favs)
+        self._settings.setValue("folders/pins", self._quick_pins)
         self._settings.setValue("folders/recents", self._quick_recents)
         self._settings.sync()
 
     def _record_quick_folder(self, folder: Path) -> None:
-        """拖入成功后记入「最近」：去重、最新在前、超上限挤掉最旧；收藏不动。"""
+        """拖入成功后记入「最近」：去重、最新在前、超上限挤掉最旧；常驻不动。"""
         s = str(folder)
-        if s in self._quick_favs:
+        if s in self._quick_pins:
             self._refresh_quick_chips()
             return
         if s in self._quick_recents:
@@ -384,28 +403,36 @@ class MainWindow(QMainWindow):
         self._on_folder_dropped(folder)
         self.statusBar().showMessage(f"📁 已切换到快捷目录: {folder}")
 
-    def _on_quick_star_toggled(self, folder: Path, star: bool) -> None:
+    def _on_quick_pin_toggled(self, folder: Path, pin: bool) -> None:
+        """📌 常驻开关：常驻的目录排最前、永不参与「最近」淘汰。"""
         s = str(folder)
-        if star:
-            if s in self._quick_favs:
-                self._quick_favs.remove(s)
-            self._quick_favs.insert(0, s)
-            del self._quick_favs[self.QUICK_FAV_MAX:]
-            if s in self._quick_recents:
+        if pin:
+            if s in self._quick_pins:               # 已常驻 → 提到最前
+                self._quick_pins.remove(s)
+            elif len(self._quick_pins) >= self.QUICK_PIN_MAX:
+                self.statusBar().showMessage(
+                    f"⚠ 常驻已达上限 {self.QUICK_PIN_MAX} 个，请先取消一个", 4000)
+                self.drop.set_pinned(s in self._quick_pins)
+                return
+            self._quick_pins.insert(0, s)
+            if s in self._quick_recents:            # 常驻不占「最近」名额
                 self._quick_recents.remove(s)
+            msg = f"📌 已设为常驻（不会被新历史挤掉）: {folder.name}"
         else:
-            if s in self._quick_favs:
-                self._quick_favs.remove(s)
-            if s not in self._quick_recents:
+            if s in self._quick_pins:
+                self._quick_pins.remove(s)
+            if s not in self._quick_recents:        # 取消常驻 → 回到最近最前
                 self._quick_recents.insert(0, s)
                 del self._quick_recents[self.QUICK_RECENT_MAX:]
+            msg = f"📌 已取消常驻: {folder.name}"
         self._save_quick_folders()
         self._refresh_quick_chips()
+        self.statusBar().showMessage(msg, 3000)
 
     def _on_quick_removed(self, folder: Path) -> None:
         s = str(folder)
-        if s in self._quick_favs:
-            self._quick_favs.remove(s)
+        if s in self._quick_pins:
+            self._quick_pins.remove(s)
         if s in self._quick_recents:
             self._quick_recents.remove(s)
         self._save_quick_folders()
