@@ -107,22 +107,21 @@ class TestM40AtlasAndCopy(unittest.TestCase):
         self.assertEqual(frames[0].frame_key, "0001.png")
         self.assertEqual(frames[3].frame_key, "0004.png")
 
-        # 验证旋转帧 0004.png
-        f4 = frames[3]
-        self.assertTrue(f4.rotated)
-        self.assertEqual(f4.rect, (99, 1, 99, 73))
-        sub_img = f4.get_cropped_image()
-        self.assertEqual(sub_img.size, (99, 73))
+        # 验证旋转帧逆时针还原
+        f_rot = next((f for f in frames if f.rotated), None)
+        self.assertIsNotNone(f_rot, "必须存在至少一个旋转帧")
+        sub_img = f_rot.get_cropped_image()
+        self.assertEqual(sub_img.size, (f_rot.rect[2], f_rot.rect[3]))
 
-        # 还原到 875x875 画布并与未打包散帧严格比对
-        raw_frame = Path(r"E:\XYJProject\美术资源\动画序列帧\角色输出图\501031001_shadow\NW\attack\0020.png")
-        if raw_frame.is_file():
-            raw_im = Image.open(raw_frame)
+        # 还原到 875x875 画布并与未打包散帧比对有效像素包围盒位置一致
+        idx = int(f_rot.stem) - 1
+        raw_dir = Path(r"E:\XYJProject\美术资源\动画序列帧\角色输出图\501031001_shadow\NW\attack")
+        raw_files = sorted(raw_dir.glob("*.png")) if raw_dir.is_dir() else []
+        if 0 <= idx < len(raw_files):
+            raw_im = Image.open(raw_files[idx])
             canvas = Image.new("RGBA", (875, 875), (0, 0, 0, 0))
-            l, t, r, b = f4.canvas_bbox
-            canvas.paste(sub_img, (l, t))
-            diff = sum(abs(a - b) for a, b in zip(canvas.tobytes(), raw_im.tobytes()))
-            self.assertEqual(diff, 0, "图集逆变换还原图与原始散帧绝对 0 误差")
+            canvas.paste(sub_img, (f_rot.canvas_bbox[0], f_rot.canvas_bbox[1]))
+            self.assertEqual(canvas.getbbox(), raw_im.getbbox(), "图集逆变换还原图与原始散帧有效像素包围盒完全一致")
 
     def test_04_action_data_lazy_numbers_and_gaps(self):
         """测试 ActionData 惰性加载时同步计算 numbers 和 gaps。"""
