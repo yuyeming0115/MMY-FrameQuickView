@@ -10,4 +10,6 @@ releases/
 # .workbuddy 仅保留项目记忆到 git
 .workbuddy/*
 !.workbuddy/memory/
+.workbuddy-ai/*
+!.workbuddy-ai/memory/
 稳定版
