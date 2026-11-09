@@ -199,7 +199,7 @@ def parse_atlas_filename(name: str) -> tuple[str, str | None, str | None, str | 
     m = _ATLAS_ACTION_RX.match(name)
     if m:
         res_id, part, direction, action, ext = m.groups()
-        return res_id, part, direction, action, ext.lower()
+        return res_id, part.lower() if part else None, direction, action, ext.lower()
 
     m2 = _ATLAS_FLAT_RX.match(name)
     if m2:

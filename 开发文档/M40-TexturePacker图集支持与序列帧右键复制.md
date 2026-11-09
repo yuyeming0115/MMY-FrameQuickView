@@ -72,3 +72,7 @@ $$\text{orig\_right} = \text{orig\_left} + w, \quad \text{orig\_bottom} = \text{
 - `tests/smoke_core.py`：PASS
 - `tests/test_m37_look_combine.py`：PASS
 - `tests/test_m36_worldboss_blank.py`：PASS
+
+## 四、 变更记录
+
+- **2026-11-06**：`parse_atlas_filename` 返回的部位后缀统一转小写（`part.lower()`），兼容大小写混合的图集文件名与模板 `parts` / `layer_order` 匹配。
