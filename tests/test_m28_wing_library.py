@@ -113,7 +113,7 @@ try:
     _wait_workers(win)
     layers, flat_mask, _off, keys = win._layers_for_current()
     assert len(layers) == 4, f"穿戴翅膀后应 4 层: {len(layers)}"
-    assert flat_mask[-1] is True, f"穿戴翅膀应在顶层（末位）: {flat_mask}"
+    assert flat_mask[-1] is False, f"穿戴翅膀应在顶层（末位）: {flat_mask}"
     assert len(layers[-1]) == 3, f"青翼 E/idle 应 3 帧: {len(layers[-1])}"
     assert keys[-1] == "50151101_wings", f"末位 key 应为翅膀名: {keys[-1]}"
     print(f"[3] OK 穿戴青翼: {len(layers)} 层, 翅膀 {len(layers[-1])} 帧, flat_mask={flat_mask}")

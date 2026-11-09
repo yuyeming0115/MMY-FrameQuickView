@@ -1234,7 +1234,8 @@ class MainWindow(QMainWindow):
         - 该资源若已在本组内（旧目录结构自动并入）→ 跳过，避免重复叠加
         - **取帧方式**：flat 资源（特效）取自身序列；常规资源（翅膀）按当前
           (方向,动作) 取帧，缺失时退回该资源的第一个可用组合
-        - 一律 flat_mask=True：穿戴的是独立资源，需按 bbox 与角色居中对齐
+        - 仅 flat 资源（如特效）设置 flat_mask=True 并应用 fx_offsets 居中微调；
+          常规穿戴资源（如翅膀）保持 flat_mask=False 按原始画布对齐
         - 偏移按**资源名**存取 → 同一资源调一次偏移，所有套装复用
         - 返回追加到的层下标（未追加返回 None），供调用方标记可微调的特效层
         """
@@ -1256,9 +1257,10 @@ class MainWindow(QMainWindow):
             return None
         idx = len(layers)
         layers.append(ad.frames)
-        flat_mask.append(True)
+        flat_mask.append(p.is_flat)
         part_keys.append(p.name)
-        fx_offsets[idx] = self._get_fx_offset(p.name)
+        if p.is_flat:
+            fx_offsets[idx] = self._get_fx_offset(p.name)
         return idx
 
     def _load_dressed_fx(self) -> dict[str, str]:
