@@ -310,6 +310,13 @@ class GridView(QFrame):
         # 解码完成后保存，供「原图/自适应」切换重算用
         self._loaded: list[tuple[QPixmap, str, int]] = []  # (pixmap, label, idx)
         self._max_w = self._max_h = 0  # 原图最大尺寸
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+    def sizeHint(self) -> QSize:
+        return QSize(500, 400)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(160, 160)
 
     def show_sequence(
         self,

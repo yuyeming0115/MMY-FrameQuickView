@@ -8,11 +8,11 @@
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QColor, QBrush, QGuiApplication
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLineEdit, QLabel, QMenu, QPushButton, QTreeWidget,
-    QTreeWidgetItem, QVBoxLayout, QAbstractItemView, QHeaderView, QWidget,
+    QTreeWidgetItem, QVBoxLayout, QAbstractItemView, QHeaderView, QWidget, QSizePolicy,
 )
 
 from .hover_scroll import enable_hover_scroll
@@ -139,6 +139,10 @@ class PartList(QFrame):
         # 之前 setFixedWidth(220) 锁死导致长 ID+中文（如"50142004 · 月河郡主(琴)·发"）出省略号。
         self.setMinimumWidth(220)
         self.setMaximumWidth(480)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+
+    def sizeHint(self) -> QSize:
+        return QSize(max(220, self.width()), 600)
 
     def resizeEvent(self, event) -> None:
         """容器宽度变化（splitter 拖动）时，同步树第 0 列宽 = 容器宽 - 折叠按钮 28 - padding 12。"""

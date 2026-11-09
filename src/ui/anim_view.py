@@ -24,11 +24,11 @@ import math
 import numpy as np
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt, QTimer, Signal, QPointF, QRectF
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal, QPointF, QRectF, QSize
 from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractScrollArea, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel,
-    QPushButton, QScrollArea, QSlider, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSizePolicy, QSlider, QVBoxLayout, QWidget,
 )
 
 from .hover_scroll import enable_hover_scroll
@@ -533,6 +533,7 @@ class AnimView(QFrame):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(4)
@@ -702,6 +703,12 @@ class AnimView(QFrame):
         self._pending_fx: tuple[str, int, int] | None = None
 
     # ---------------- 公共 API ----------------
+    def sizeHint(self) -> QSize:
+        return QSize(500, 400)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(200, 200)
+
     def set_matrix_widget(self, widget) -> None:
         """注入方向/动作按钮矩阵（ButtonMatrix 实例），显示在 B 区左侧 QScrollArea 内。
 

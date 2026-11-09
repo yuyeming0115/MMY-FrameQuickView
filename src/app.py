@@ -271,6 +271,7 @@ class MainWindow(QMainWindow):
         panes.setStretchFactor(1, 4)
         right_layout.addWidget(panes, 1)
         splitter.addWidget(right)
+        splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         # 左栏宽度锁定（PartList.setFixedWidth），这里给一致的初始比例即可。
         # 3列宽度：优先从 QSettings 恢复，否则用默认值
