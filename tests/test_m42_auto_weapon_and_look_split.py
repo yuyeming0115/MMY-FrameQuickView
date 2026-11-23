@@ -139,7 +139,9 @@ def main():
             layers, fm, _off, keys = win._layers_for_current()
             assert len(layers) == 5, f"天命·男「斧」时装应自动配斧 5 层: {len(layers)} / {keys}"
             assert "501031002_weapon" in keys and "501031002_shadow" in keys, f"应配 501031002 斧头: {keys}"
-            assert fm[-2:] == [False, False], f"自动穿戴层应 flat=False: {fm}"
+            assert keys.index("501031002_shadow") < keys.index("body") < keys.index("hair") < keys.index("501031002_weapon"), \
+                f"自动穿戴斧头影子应在最底、斧头在身体/头发之上: {keys}"
+            assert fm == [False] * 5, f"自动穿戴层应全部 flat=False: {fm}"
             assert tog._weapon_combo.isVisible(), "穿戴武器下拉应保持可见以便切换"
             assert tog._weapon_combo.currentData() == "501031002", \
                 f"下拉应回显自动推断武器: {tog._weapon_combo.currentData()}"
