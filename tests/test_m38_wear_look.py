@@ -108,11 +108,13 @@ def main():
             layers, fm, _off, keys = win._layers_for_current()
             assert len(layers) == 5, f"穿戴后应 5 层（3 显示 + 武器+影子）: {len(layers)}"
             assert "501031001_weapon" in keys and "501031001_shadow" in keys, f"part_keys: {keys}"
+            assert keys.index("501031001_shadow") < keys.index("body") < keys.index("hair") < keys.index("501031001_weapon"), \
+                f"穿戴武器影子应在最底、武器在身体/头发之上: {keys}"
             # 穿戴层必须是普通层语义（flat=False）：部件与主体同画布渲染，按原始
             # 坐标叠加才与手上位置对齐；特效层语义（居中）会把武器挪离手（实测 bug）
-            assert fm[-2:] == [False, False], f"穿戴层应 flat=False: {fm}"
+            assert fm == [False] * 5, f"穿戴层应全部 flat=False: {fm}"
             assert settings.value("layering/dressed_weapon/501112101", "", type=str) == "501031001"
-            print(f"  ✓ 5 层 {keys}（flat=False 原始画布对齐）")
+            print(f"  ✓ 5 层 {keys}（影子最底 + flat=False 原始画布对齐）")
 
             print("== 3. 武器组：可反向穿戴时装，武器槽位隐藏 ==")
             win.part_list._select_by_key("GRP:501031001")
@@ -123,8 +125,10 @@ def main():
             assert not tog._weapon_combo.isVisible(), "本组已有武器 → 槽位隐藏"
             win._on_look_dressed("body", "501112101")
             _settle(app, win)
-            layers, *_ = win._layers_for_current()
+            layers, _fm3, _off3, keys3 = win._layers_for_current()
             assert len(layers) == 4, f"穿戴时装后应 4 层（武器+影子+身体+影子）: {len(layers)}"
+            assert keys3.index("501112101_shadow") < keys3.index("501112101_body") < keys3.index("weapon"), \
+                f"反向穿戴时装应保持 影子<身体<武器: {keys3}"
             print("  ✓ 反向穿戴时装生效")
 
             print("== 4. 切回时装组：穿戴记忆恢复；脱下还原 ==")

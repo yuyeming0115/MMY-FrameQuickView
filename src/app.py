@@ -864,24 +864,29 @@ class MainWindow(QMainWindow):
             out.sort(key=lambda p: self._tpl.layer_rank(p.part))
         return out
 
-    def _append_dressed_look(self, layers, flat_mask, fx_offsets, part_keys,
-                             display: list[PartData], direction, action) -> None:
-        """M38：把穿戴的形象组部件追加为层（原地修改；取帧方式同翅膀）。
+    def _dressed_look_entries(
+        self,
+        display: list[PartData],
+        direction: str,
+        action: str,
+    ) -> list[tuple[tuple[int, int], list[Path], bool, str]]:
+        """M38：返回穿戴形象组部件的排序条目 `(sort_key, frames, is_flat, part_key)`。
 
         ⚠ flat_mask 必须为 False（普通层语义）：这些部件与主体出自**同一张渲染
         画布**（如 875×875），按原始画布坐标叠加才与手上位置对齐。若走特效层
         语义（flat=True，按层自身并集框居中），武器会被强制挪到画布中心而脱手
         ——实测 2026-09-29（昆仑剑侠武器穿到天命时装，画布对齐开关均无法补救）。
         """
+        out: list[tuple[tuple[int, int], list[Path], bool, str]] = []
         for p in self._dressed_look_parts(display):
             ad = p.action_data(direction, action)
             if ad is None:
                 ad = next((a for col in p.matrix.values() for a in col.values()), None)
             if ad is None or not ad.frames:
                 continue
-            layers.append(ad.frames)
-            flat_mask.append(False)
-            part_keys.append(p.name)
+            rank = (0, self._tpl.layer_rank(p.part)) if self._tpl is not None else (0, 0)
+            out.append((rank, ad.frames, False, p.name))
+        return out
 
     def _on_look_dressed(self, slot: str, look_key: str) -> None:
         """M38：穿戴/脱下时装/头发/武器 → 按当前组 key 记忆并刷新。"""
@@ -1194,8 +1199,11 @@ class MainWindow(QMainWindow):
             # M28：单部件视图下，特效自身就是可微调层
             self._fx_layer_indices = {0} if self._part.is_flat else set()
             return layers, flat_mask, fx_offsets, part_keys
-        # 组模式：显示部件（M37：含同形象跨 ID 组合）各取 (d,a) 帧
+        # 组模式：显示部件（M37：含同形象跨 ID 组合）与穿戴形象组（M38/M42）
+        # 统一按模板 layer_order 排序（全部影子最底 → body → hair → weapon → 组内特效），
+        # 避免穿戴武器的影子盖在人物身体之上
         display = self._display_parts(self._group)
+        entries: list[tuple[tuple[int, int], list[Path], bool, str]] = []
         for p in display:
             key = self._toggle_key(p, display)
             if key in self._hidden_parts:
@@ -1203,18 +1211,25 @@ class MainWindow(QMainWindow):
             ad = p.action_data(direction, action)
             if ad is None and p.is_flat:
                 ad = next((a for col in p.matrix.values() for a in col.values()), None)
-            idx = len(layers)
-            layers.append(ad.frames if ad else [])
-            flat_mask.append(p.is_flat)
+            if self._tpl is None:
+                rank = (1 if p.is_flat else 0, 0)
+            elif p.is_flat:
+                rank = (1, len(self._tpl.layer_order))
+            else:
+                rank = (0, self._tpl.layer_rank(p.part))
+            entries.append((rank, ad.frames if ad else [], p.is_flat, key))
+        entries.extend(self._dressed_look_entries(display, direction, action))
+        entries.sort(key=lambda e: e[0])
+
+        for idx, (_rank, frames, is_flat, key) in enumerate(entries):
+            layers.append(frames)
+            flat_mask.append(is_flat)
             part_keys.append(key)
-            if p.is_flat:
+            if is_flat:
                 fx_offsets[idx] = self._get_fx_offset(key)
         # M28：记录「真正的特效层」下标（组内 flat 部件）——穿戴的翅膀虽也是
         # flat 层，但按 (方向,动作) 取帧、对齐本就准确，不参与 Ctrl+方向键微调。
         self._fx_layer_indices = {i for i, f in enumerate(flat_mask) if f}
-        # M38：先追加穿戴的时装/头发/武器（跨 ID 形象组，含其影子，按 layer_order 内部排序）
-        self._append_dressed_look(layers, flat_mask, fx_offsets, part_keys,
-                                  display, direction, action)
         # M28：先追加穿戴的翅膀（在角色之上）→ 再追加穿戴特效（置顶最上层）
         self._append_dressed_wings(layers, flat_mask, fx_offsets, part_keys)
         idx = self._append_dressed_fx(layers, flat_mask, fx_offsets, part_keys)
