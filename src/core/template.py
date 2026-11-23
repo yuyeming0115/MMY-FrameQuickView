@@ -32,7 +32,7 @@ class Template:
     categories: list[dict] = field(default_factory=list)
     # 套装组合并阈值：同父文件夹下跨 ID 部件数 ≤ 该值才合并为套装组（防大库误合并）。
     outfit_merge_max: int = 16
-    # M37 跨 ID 形象组合：匹配表中文名里的「类型词」表（如 武器/职业/时装/发）。
+    # M37/M42 跨 ID 形象组合：匹配表中文名里的「类型词」表（如 武器/职业装/职业/时装/装/发）。
     # 中文名去掉类型词及其后缀 = 形象前缀，前缀相同的不同 ID 组自动组合叠显；
     # 空/缺省 = 功能关闭（行为与旧版一致）。
     look_types: list[str] = field(default_factory=list)
@@ -115,22 +115,26 @@ class Template:
     def look_split(self, cn: str) -> tuple[str, str] | None:
         """中文名 → (形象前缀, 类型词)；无类型词命中（或前缀为空）返回 None。
 
-        M37：在名字里找类型词的**最后一次**出现（兼容「武器0阶」这类带尾缀的名），
-        同位置取更长的词（防「发」截胡「时装」这类包含关系——当前词表互不包含，
-        这里是防御性规则）。
+        M37/M42：在名字里找类型词的**最后一次**出现（兼容「武器0阶」这类带尾缀的名），
+        优先取**匹配结束位置更靠后**的词；同结束位置取更长的词（防「装」截胡「时装」），
+        最后统一校验去空白后的前缀非空（避免词在开头时被短后缀误截）。
         """
-        best: tuple[str, int] | None = None
+        if not cn:
+            return None
+        best: tuple[str, int, int] | None = None  # (word, pos, end)
         for word in self.look_types:
             if not word:
                 continue
             pos = cn.rfind(word)
-            if pos <= 0:
-                continue          # 前缀为空 / 未命中
-            if best is None or pos > best[1] or (pos == best[1] and len(word) > len(best[0])):
-                best = (word, pos)
+            if pos < 0:
+                continue
+            end = pos + len(word)
+            if best is None or end > best[2] or (end == best[2] and len(word) > len(best[0])):
+                best = (word, pos, end)
         if best is None:
             return None
-        return cn[:best[1]].strip(), best[0]
+        prefix = cn[:best[1]].strip()
+        return (prefix, best[0]) if prefix else None
 
     # ---------- 解析辅助 ----------
     def frame_regex(self) -> re.Pattern:
@@ -233,3 +237,14 @@ def save_template(tpl: Template, directory: Path | None = None) -> Path:
     fp = directory / f"{safe}.json"
     fp.write_text(json.dumps(tpl.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
     return fp
+
+
+_WEAPON_TAG_RX = re.compile(r"[「〔]([^「〔」〕]+)[」〕]")
+
+
+def extract_weapon_tag(cn: str) -> str | None:
+    """提取中文名中的最后一个非空武器/流派标签（如「斧」「剑」/〔剑〕）；无有效标签返回 None。"""
+    if not cn:
+        return None
+    tags = [m.strip() for m in _WEAPON_TAG_RX.findall(cn) if m.strip()]
+    return tags[-1] if tags else None

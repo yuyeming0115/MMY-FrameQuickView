@@ -13,7 +13,7 @@ from .core.blankcheck import blank_sequences
 from .core.namemap import NameMap, discover_map_file
 from .core.scanner import IdGroup, PartData, ScanResult, scan_root
 from .core.stats import build_hud_stats
-from .core.template import Template, load_templates
+from .core.template import Template, extract_weapon_tag, load_templates
 from .ui.anim_view import AnimView
 from .ui.button_matrix import ButtonMatrix
 from .ui.drop_zone import DropZone
@@ -673,12 +673,13 @@ class MainWindow(QMainWindow):
             [(p.name, self._wing_display_name(p)) for p in self._wing_library],
             self._dressed_wings.get(grp.key, ""),
         )
-        # M38：穿戴时装/头发/武器——当前显示（含形象组合）缺哪类才提供哪类的下拉
-        have = {p.part for p in self._display_parts(grp)}
+        # M38/M42：穿戴时装/头发/武器——当前显示（含形象组合）缺哪类才提供哪类的下拉；
+        # 未手动指定时，weapon 槽位按武器标签（如「斧」/「剑」）自动推断默认武器
+        have = {p.part for p in display}
         for slot in self._LOOK_SLOTS:
-            store = getattr(self, f"_dressed_{slot}")
             items = [] if slot in have else self._look_library(slot)
-            getattr(self.anim_view, f"set_{slot}_library")(items, store.get(grp.key, ""))
+            cur = "" if slot in have else self._effective_dressed_look(slot, grp)
+            getattr(self.anim_view, f"set_{slot}_library")(items, cur)
         # M33：切换组保持当前方向/动作（直到用户主动改变）；
         # 新组缺失该组合时由 show_group 兜底回退默认
         direction, action = self.matrix.current()
@@ -807,6 +808,41 @@ class MainWindow(QMainWindow):
             out.append((g.key, self._look_group_label(g)))
         return out
 
+    def _auto_weapon_key(self, grp: IdGroup) -> str:
+        """M42：按角色名中的武器标签（如「斧」「剑」）自动推断默认 0 阶武器组 key。
+
+        仅作用于带模块化身体/头发部件（body/hair）的常规组，避免纯 ID 整包资源
+        （怪物/NPC/伙伴）、独立翅膀、坐骑等误叠加主角武器。
+        """
+        if self._result is None or self._namemap is None:
+            return ""
+        if grp.is_outfit or grp.is_variant or grp.is_flat:
+            return ""
+        if any(p.part == "weapon" for p in grp.parts):
+            return ""
+        if not any(p.part in ("body", "hair") for p in grp.parts):
+            return ""
+        tag = extract_weapon_tag(self._look_group_label(grp))
+        if not tag:
+            return ""
+        for w_key, w_label in self._look_library("weapon"):
+            if extract_weapon_tag(w_label) == tag:
+                return w_key
+        return ""
+
+    def _effective_dressed_look(self, slot: str, grp: IdGroup) -> str:
+        """M38/M42：取当前组在指定槽位实际生效的穿戴组 key（显式记忆优先，其次自动推断）。"""
+        store = getattr(self, f"_dressed_{slot}")
+        if grp.key in store:
+            val = store[grp.key]
+            # 显式脱下("") 或所选组在当前目录有效时严格遵循记忆；
+            # 若记住的旧武器 key 在当前目录已失效，则回退默认推断（不写回配置）
+            if val == "" or self._group_by_key(val) is not None:
+                return val
+        if slot == "weapon":
+            return self._auto_weapon_key(grp)
+        return ""
+
     def _dressed_look_parts(self, display: list[PartData]) -> list[PartData]:
         """M38：当前组穿戴的时装/头发/武器组的全部渲染部件（叠层与空帧抽样共用）。
 
@@ -819,7 +855,7 @@ class MainWindow(QMainWindow):
         for slot in self._LOOK_SLOTS:
             if slot in have:
                 continue
-            look_key = getattr(self, f"_dressed_{slot}").get(self._group.key, "")
+            look_key = self._effective_dressed_look(slot, self._group)
             grp = self._group_by_key(look_key)
             if grp is None:
                 continue
