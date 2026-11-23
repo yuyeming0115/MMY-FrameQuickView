@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from .hover_scroll import enable_hover_scroll
 from .flow_layout import FlowLayout
 
+from ..core.cleanup import cleanup_target_parts, collect_extra_cleanup_items
 from ..core.namemap import NameMap
 from ..core.scanner import PartData, ScanResult
 from ..core.template import Template
@@ -44,12 +45,14 @@ class PartList(QFrame):
     part_selected = Signal(object)  # PartData
     group_selected = Signal(str)    # 组 key（点击组头时触发：ID 组=res_id，套装组=父文件夹路径）
     pick_namemap = Signal()         # 点击「📖 选择匹配表」按钮时触发，app 打开文件选择
+    clean_extra_requested = Signal(str)  # M43：左栏右键清理多余动作（传树项 key）
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._parts: dict[str, PartData] = {}   # folder str -> PartData
         self._namemap: NameMap | None = None
         self._result: ScanResult | None = None
+        self._tpl: Template | None = None
         self._loading = False                    # 防止 itemChanged 递归
         self._fills_check = False                # M37 起默认关（🟠 降噪）；启动时 app 会同步实际值
 
@@ -177,6 +180,7 @@ class PartList(QFrame):
 
     def set_template(self, tpl: Template | None) -> None:
         """模板分类顺序（chips 顺序与模板 categories 配置一致）。"""
+        self._tpl = tpl
         self._category_order = tpl.category_names() if tpl else []
 
     def set_fills_check(self, enabled: bool) -> None:
@@ -521,6 +525,26 @@ class PartList(QFrame):
         if folder_path:
             menu.addSeparator()
             menu.addAction("复制文件夹路径", lambda: self._copy_text(folder_path))
+
+        if self._tpl is not None:
+            extra_items = []
+            if key.startswith("GRP:") and grp is not None and not grp.is_flat:
+                targets = cleanup_target_parts(grp.parts)
+                extra_items = collect_extra_cleanup_items(targets, self._tpl, grp)
+            elif not key.startswith("GRP:"):
+                pd_cur = self._parts.get(key)
+                if pd_cur is not None and not pd_cur.is_flat:
+                    parent_grp = (
+                        next((g for g in self._result.groups if pd_cur in g.parts), None)
+                        if self._result else None
+                    )
+                    extra_items = collect_extra_cleanup_items([pd_cur], self._tpl, parent_grp)
+            if extra_items:
+                menu.addSeparator()
+                menu.addAction(
+                    f"🧹 清理多余动作（{len(extra_items)} 项）…",
+                    lambda _=False, k=key: self.clean_extra_requested.emit(k),
+                )
         menu.exec(self.tree.viewport().mapToGlobal(pos))
 
     @staticmethod

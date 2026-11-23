@@ -6,11 +6,18 @@
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QPushButton, QHBoxLayout, QSizePolicy
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QSizePolicy, QVBoxLayout
 
-from ..core.scanner import PartData, IdGroup
-from ..core.stats import group_combos, part_combos
+from ..core.cleanup import (
+    action_disk_paths,
+    cleanup_target_parts,
+    collect_extra_cleanup_items,
+    part_extra_actions,
+    part_rule_type,
+)
+from ..core.scanner import IdGroup, PartData
+from ..core.stats import group_combos
 from ..core.template import Template
 
 # 默认方向：首次进入某部件/组（direction=None）时高亮的方向。
@@ -67,18 +74,23 @@ QPushButton[missing="true"] {
 QPushButton[unexpected="true"] {
     background: #23262a; border: 1px solid #2f343a; color: #5A636E;
 }
+/* M43：超出当前模板规则的多余动作（磁盘实际存在）→ 琥珀警示 */
+QPushButton[extra="true"] {
+    background: rgba(232,163,61,0.16); border: 1px solid #E8A33D; color: #F2C97D;
+}
 """
 LABEL_STYLE = "color: #96A1AD; font-size: 12px; padding: 2px 0 1px 2px; letter-spacing: 1px;"
 
 # M32.3 角标分色（用户反馈迭代：金→紫）：蓝色 = 方向按钮·动作数；
-# 紫色 = 动作按钮·帧数；红色 = 断档/帧数不一致（优先级最高）
+# 紫色 = 动作按钮·帧数；红色 = 断档/帧数不一致（优先级最高）；M43 琥珀 = 多余动作
 BADGE_PURPLE = "QLabel { background: #9C6ADE; color: #FFFFFF; font-size: 11px; font-weight: 500; border-radius: 8px; padding: 0 5px; }"
 BADGE_BLUE = "QLabel { background: #4C8FD6; color: #FFFFFF; font-size: 11px; font-weight: 500; border-radius: 8px; padding: 0 5px; }"
 BADGE_RED = "QLabel { background: #C74444; color: #FFFFFF; font-size: 11px; font-weight: 500; border-radius: 8px; padding: 0 5px; }"
+BADGE_AMBER = "QLabel { background: #D98A2B; color: #1E2023; font-size: 11px; font-weight: 600; border-radius: 8px; padding: 0 5px; }"
 
 
 class BadgeButton(QPushButton):
-    """带右上角帧数角标的按钮（M32）：金角标 = 帧数，红角标 = 断档/不一致。"""
+    """带右上角帧数角标的按钮（M32）：金角标 = 帧数，红角标 = 断档/不一致，琥珀 = 多余。"""
 
     def __init__(self, text: str, parent=None):
         super().__init__(text, parent)
@@ -91,7 +103,14 @@ class BadgeButton(QPushButton):
             self._badge.hide()
             return
         self._badge.setText(text)
-        style = BADGE_RED if danger else (BADGE_BLUE if tone == "blue" else BADGE_PURPLE)
+        if danger:
+            style = BADGE_RED
+        elif tone == "blue":
+            style = BADGE_BLUE
+        elif tone == "amber":
+            style = BADGE_AMBER
+        else:
+            style = BADGE_PURPLE
         self._badge.setStyleSheet(style)
         self._badge.adjustSize()
         self._reposition_badge()
@@ -109,6 +128,21 @@ class BadgeButton(QPushButton):
         self._reposition_badge()
 
 
+def _apply_badge(btn: BadgeButton, name: str, counts: dict, danger: set,
+                 tone: str, extra: set[str]) -> None:
+    """统一套用按钮角标（含 M43 多余动作琥珀「多」标）。"""
+    if name in extra:
+        is_danger = name in danger
+        btext = str(counts[name]) if (is_danger and name in counts) else (
+            f"{counts[name]}·多" if name in counts else "多"
+        )
+        btn.set_badge(btext, danger=is_danger, tone="amber")
+    elif name in counts:
+        btn.set_badge(str(counts[name]), danger=name in danger, tone=tone)
+    else:
+        btn.set_badge(None)
+
+
 class ButtonStack(QFrame):
     """一组按钮：上方一行 label（可选右侧 toggle button），下方竖直堆叠一列按钮（B 区左侧占位用）。
 
@@ -116,6 +150,7 @@ class ButtonStack(QFrame):
     """
 
     selected = Signal(str)
+    context_menu_requested = Signal(str, object)   # (按钮名, QPoint global_pos)
 
     def __init__(self, label: str, parent=None, header_btn_text: str | None = None):
         super().__init__(parent)
@@ -161,10 +196,14 @@ class ButtonStack(QFrame):
                 unexpected: set[str] | None = None,
                 counts: dict[str, int] | None = None,
                 danger: set[str] | None = None,
-                badge_tone: str = "purple") -> None:
+                badge_tone: str = "purple",
+                extra: set[str] | None = None,
+                tooltips: dict[str, str] | None = None) -> None:
         unexpected = unexpected or set()
         counts = counts or {}
         danger = danger or set()
+        extra = extra or set()
+        tooltips = tooltips or {}
         for btn in self._buttons.values():
             self._layout.removeWidget(btn)
             btn.deleteLater()
@@ -178,13 +217,20 @@ class ButtonStack(QFrame):
             btn = BadgeButton(name)
             btn.setCheckable(True)
             btn.setProperty("missing", name in missing)
-            if name in unexpected:
+            if name in extra:
+                btn.setProperty("extra", True)
+            elif name in unexpected:
                 btn.setProperty("unexpected", True)
+            if name in tooltips:
+                btn.setToolTip(tooltips[name])
             btn.setStyleSheet(BTN_STYLE)
             btn.setChecked(name == current)
-            if name in counts:
-                btn.set_badge(str(counts[name]), danger=name in danger, tone=badge_tone)
+            _apply_badge(btn, name, counts, danger, badge_tone, extra)
             btn.clicked.connect(lambda _=False, n=name: self.selected.emit(n))
+            btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            btn.customContextMenuRequested.connect(
+                lambda pos, b=btn, n=name: self.context_menu_requested.emit(n, b.mapToGlobal(pos))
+            )
             self._layout.addWidget(btn)
             self._buttons[name] = btn
 
@@ -198,7 +244,9 @@ class ButtonMatrix(QFrame):
 
     direction_selected = Signal(str)
     action_selected = Signal(str)
-    overlay_toggled = Signal(bool)   # 「显向」开关
+    overlay_toggled = Signal(bool)           # 「显向」开关
+    delete_action_requested = Signal(str, str)  # M43：(direction, action) 移入回收站
+    clean_extra_requested = Signal()         # M43：清理当前项全部多余动作
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -211,6 +259,7 @@ class ButtonMatrix(QFrame):
         layout.addWidget(self.act_stack)
         self.dir_stack.selected.connect(self.direction_selected)
         self.act_stack.selected.connect(self.action_selected)
+        self.act_stack.context_menu_requested.connect(self._on_action_context_menu)
         if self.dir_stack.header_btn is not None:
             self.dir_stack.header_btn.toggled.connect(self.overlay_toggled)
 
@@ -222,7 +271,11 @@ class ButtonMatrix(QFrame):
 
         self._tpl: Template | None = None
         self._part: PartData | None = None
+        self._part_group: IdGroup | None = None
         self._group: IdGroup | None = None     # 组视图引用（apply_blank 就地刷新用）
+        self._group_parts: list[PartData] = []
+        self._part_groups_map: dict[str, IdGroup] = {}
+        self._extra_map: dict[str, list[str]] = {}
         # M36：当前选中项的空序列集合 {(direction, action)}（app 后台抽样后回填，
         # show_part/show_group 重建角标时读取）
         self._blank_seqs: set[tuple[str, str]] = set()
@@ -230,6 +283,66 @@ class ButtonMatrix(QFrame):
     def set_blank(self, blank: set[tuple[str, str]]) -> None:
         """M36：设置当前选中项的空序列集合（配合 app 重新刷新矩阵生效）。"""
         self._blank_seqs = blank or set()
+
+    def _target_parts(self) -> list[PartData]:
+        """当前选中项参与多余判定与右键清理的部件列表（排除扁平特效）。"""
+        if self._part is not None:
+            return [] if self._part.is_flat else [self._part]
+        if self._group is not None:
+            raw = self._group_parts if self._group_parts else self._group.parts
+            return cleanup_target_parts(raw)
+        return []
+
+    def _group_for(self, part: PartData) -> IdGroup | None:
+        if self._part is not None:
+            return self._part_group
+        return self._part_groups_map.get(str(part.folder), self._group)
+
+    def _compute_extra_map(self, parts: list[PartData]) -> dict[str, list[str]]:
+        if self._tpl is None:
+            return {}
+        merged: dict[str, set[str]] = {}
+        for p in parts:
+            for d, acts in part_extra_actions(p, self._tpl, self._group_for(p)).items():
+                merged.setdefault(d, set()).update(acts)
+        return {d: sorted(acts) for d, acts in merged.items() if acts}
+
+    def _on_action_context_menu(self, action: str, global_pos) -> None:
+        tpl = self._tpl
+        target_parts = self._target_parts()
+        if tpl is None or not target_parts:
+            return
+        direction = self._checked_name(self.dir_stack)
+        has_disk = bool(
+            direction and any(action_disk_paths(p, direction, action, tpl) for p in target_parts)
+        )
+        extra_items = [
+            it for p in target_parts
+            for it in collect_extra_cleanup_items([p], tpl, self._group_for(p))
+        ]
+
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background: #2A2E33; border: 1px solid #3A3F46; padding: 4px; }"
+            "QMenu::item { color: #E8E4D9; padding: 6px 16px; border-radius: 3px; }"
+            "QMenu::item:selected { background: #3A3F46; color: #D4AF37; }"
+            "QMenu::item:disabled { color: #5A636E; }"
+        )
+        act_label = (
+            f"🗑 移入回收站：删除 {direction}/{action}…"
+            if direction else f"🗑 移入回收站：删除 {action}…"
+        )
+        act_del = menu.addAction(act_label)
+        act_del.setEnabled(has_disk)
+        if direction and has_disk:
+            act_del.triggered.connect(
+                lambda _=False, d=direction, a=action: self.delete_action_requested.emit(d, a)
+            )
+        if extra_items:
+            menu.addSeparator()
+            act_clean = menu.addAction(f"🧹 清理当前项全部多余动作（{len(extra_items)} 项）…")
+            act_clean.triggered.connect(lambda _=False: self.clean_extra_requested.emit())
+        menu.exec(global_pos)
 
     def apply_blank(self, blank: set[tuple[str, str]]) -> None:
         """M36：空帧抽样完成后**就地**刷新现存按钮的角标（不重建按钮）。
@@ -245,37 +358,43 @@ class ButtonMatrix(QFrame):
             self._refresh_badges(self.dir_stack, dir_counts, dir_danger, tone="blue")
             direction = self._checked_name(self.dir_stack)
             badges = self._part_badges(self._part, direction)
+            extra_dir = set(self._extra_map.get(direction, [])) if direction else set()
             self._refresh_badges(self.act_stack, badges["counts"], badges["danger"],
-                                 tone="purple")
+                                 tone="purple", extra=extra_dir)
         elif self._group is not None:
             st = group_combos(self._group, self._tpl)
             db = self._dir_badges(st)
             self._refresh_badges(self.dir_stack, db["counts"], db["danger"], tone="blue")
             direction = self._checked_name(self.dir_stack)
             gb = self._group_badges(st, direction)
-            self._refresh_badges(self.act_stack, gb["counts"], gb["danger"], tone="purple")
+            extra_dir = set(self._extra_map.get(direction, [])) if direction else set()
+            self._refresh_badges(self.act_stack, gb["counts"], gb["danger"],
+                                 tone="purple", extra=extra_dir)
 
     @staticmethod
     def _checked_name(stack: ButtonStack) -> str | None:
         return next((n for n, b in stack._buttons.items() if b.isChecked()), None)
 
     def _refresh_badges(self, stack: ButtonStack, counts: dict, danger: set,
-                        tone: str) -> None:
+                        tone: str, extra: set[str] | None = None) -> None:
+        extra = extra or set()
         for name, btn in stack._buttons.items():
-            if name in counts:
-                btn.set_badge(str(counts[name]), danger=name in danger, tone=tone)
-            else:
-                btn.set_badge(None)
+            _apply_badge(btn, name, counts, danger, tone, extra)
 
     def set_template(self, tpl: Template) -> None:
         self._tpl = tpl
         self.dir_stack.rebuild(tpl.directions, set(tpl.directions), None)
         self.act_stack.rebuild(tpl.actions, set(tpl.actions), None)
 
-    def show_part(self, part: PartData, direction: str | None, action: str | None) -> None:
+    def show_part(self, part: PartData, direction: str | None, action: str | None,
+                  group: IdGroup | None = None) -> None:
         """按部件扫描结果刷新两列按钮的缺失状态。"""
         self._part = part
+        self._part_group = group
         self._group = None
+        self._group_parts = []
+        self._part_groups_map = {}
+        self._extra_map = self._compute_extra_map([] if part.is_flat else [part])
         tpl = self._tpl
         if tpl is None:
             return
@@ -312,23 +431,30 @@ class ButtonMatrix(QFrame):
                                counts=dir_counts, danger=dir_danger, badge_tone="blue")
 
         miss_acts: set[str] = set()
+        extra_dir: set[str] = set()
+        tooltips: dict[str, str] = {}
+        act_names = list(tpl.actions)
         if direction:
-            # 三态：expected（该类型×方向约定动作）/ present（实际拥有）/ unexpected（不适用）
-            # 用 effective_type（覆盖 wings/mount/npc/空），与 scanner 查漏一致
-            eff_type = part.effective_type or part.character_type
+            # 三态+多余：缺失直接对齐 scanner（shadow/fills 不标红）；
+            # 规则基准按 part_rule_type（shadow 继承所属组），用于区分「不适用」与「多余」
+            rule_type = part_rule_type(part, self._part_group)
+            eff_type = rule_type or part.effective_type or part.character_type
             expected = set(tpl.expected_actions(eff_type, direction))
             present = set(part.available_actions(direction))
-            miss_acts = expected - present          # 约定要有却没有 → 红
-            unexpected = set(tpl.actions) - expected  # 本类型不需要 → 灰
-            # M33：保持的动作在新方向不可用（缺失或本类型不适用）→ 回退默认；
-            # 只判 miss_acts 会漏掉 unexpected（如把角色的 run 带进坐骑），
-            # 结果选中一个灰显且无资源的动作
-            if action is None or action not in present:
+            extra_list = self._extra_map.get(direction, [])
+            extra_dir = set(extra_list)
+            act_names = list(tpl.actions) + [a for a in extra_list if a not in tpl.actions]
+            miss_acts = set(part.missing_actions.get(direction, []))
+            unexpected = (set(tpl.actions) - expected) - present - extra_dir
+            tooltips = {a: "⚠ 多余动作（超出当前模板规则）\n右键可移入回收站清理" for a in extra_dir}
+            present_all = present | extra_dir
+            if action is None or action not in present_all:
                 action = pick_default_action(
-                    eff_type, sorted(expected & present), sorted(present))
+                    eff_type, sorted(expected & present), sorted(present or present_all))
         else:
             unexpected = set(tpl.actions)
-        self.act_stack.rebuild(tpl.actions, miss_acts, action, unexpected,
+        self.act_stack.rebuild(act_names, miss_acts, action, unexpected,
+                               extra=extra_dir, tooltips=tooltips,
                                **self._part_badges(part, direction))
 
     def _dir_counts_for_part(self, part: PartData) -> tuple[dict, set]:
@@ -365,13 +491,19 @@ class ButtonMatrix(QFrame):
                     danger.add(a)
         return {"counts": counts, "danger": danger}
 
-    def show_group(self, group: IdGroup, direction: str | None, action: str | None) -> None:
+    def show_group(self, group: IdGroup, direction: str | None, action: str | None,
+                   display_parts: list[PartData] | None = None,
+                   part_groups: dict[str, IdGroup] | None = None) -> None:
         """组视图：按钮基于组内所有部件的并集 (方向,动作)。
 
         缺失标记 = 模板要求但组内无任何部件拥有的组合（快速看出这个 ID 整体缺什么）。
         """
         self._part = None
+        self._part_group = None
         self._group = group
+        self._group_parts = list(display_parts) if display_parts is not None else list(group.parts)
+        self._part_groups_map = part_groups or {}
+        self._extra_map = self._compute_extra_map(self._target_parts())
         tpl = self._tpl
         if tpl is None:
             return
@@ -424,13 +556,18 @@ class ButtonMatrix(QFrame):
             owned_a_dir: set[str] = set()
             for p in group.parts:
                 owned_a_dir |= set(p.available_actions(direction))
+            extra_list = self._extra_map.get(direction, [])
+            extra_dir = set(extra_list)
+            act_names = list(tpl.actions) + [a for a in extra_list if a not in tpl.actions]
             miss_acts = set(group.missing_actions.get(direction, [])) or (expected - owned_a_dir)
-            unexpected = set(tpl.actions) - expected
-            # M33：保持的动作在新方向不可用（缺失或本类型不适用）→ 回退默认
-            if action is None or action not in owned_a_dir:
+            unexpected = (set(tpl.actions) - expected) - owned_a_dir - extra_dir
+            tooltips = {a: "⚠ 多余动作（超出当前模板规则）\n右键可移入回收站清理" for a in extra_dir}
+            present_all = owned_a_dir | extra_dir
+            if action is None or action not in present_all:
                 action = pick_default_action(
-                    eff_type, sorted(expected & owned_a_dir), sorted(owned_a_dir))
-            self.act_stack.rebuild(tpl.actions, miss_acts, action, unexpected,
+                    eff_type, sorted(expected & owned_a_dir), sorted(owned_a_dir or present_all))
+            self.act_stack.rebuild(act_names, miss_acts, action, unexpected,
+                                   extra=extra_dir, tooltips=tooltips,
                                    **self._group_badges(st, direction))
         else:
             self.act_stack.rebuild(tpl.actions, set(), None, set(tpl.actions))

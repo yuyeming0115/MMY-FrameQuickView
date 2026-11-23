@@ -1,6 +1,7 @@
 """主窗口：拖拽 → 扫描 → 左栏分组列表 + 按钮矩阵 + A/B 双区。"""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QFileSystemWatcher, QSettings, Qt, QTimer, QThread, Signal
@@ -10,12 +11,20 @@ from PySide6.QtWidgets import (
 )
 
 from .core.blankcheck import blank_sequences
+from .core.cleanup import (
+    CleanupItem,
+    cleanup_target_parts,
+    collect_action_cleanup_items,
+    collect_extra_cleanup_items,
+    move_to_trash,
+)
 from .core.namemap import NameMap, discover_map_file
 from .core.scanner import IdGroup, PartData, ScanResult, scan_root
 from .core.stats import build_hud_stats
 from .core.template import Template, extract_weapon_tag, load_templates
 from .ui.anim_view import AnimView
 from .ui.button_matrix import ButtonMatrix
+from .ui.cleanup_dialog import CleanupConfirmDialog
 from .ui.drop_zone import DropZone
 from .ui.grid_view import GridView
 from .ui.part_list import PartList
@@ -58,19 +67,20 @@ QScrollBar::add-page, QScrollBar::sub-page { background: transparent; border: no
 class _BlankCheckWorker(QThread):
     """M36：空帧抽样后台线程——对 (方向,动作) 序列首帧做 alpha 检测。
 
-    每序列仅解码首帧（≤ 约 30 次解码）；结果 (key, 空序列集合) 回主线程后
-    由 app 校验 key 是否仍为当前选中项（过期结果直接丢弃，只写缓存）。
+    每序列仅解码首帧（≤ 约 30 次解码）；结果 (key, gen, 空序列集合) 回主线程后
+    由 app 校验代数与 key 是否仍有效（过期结果直接丢弃）。
     """
 
-    blank_ready = Signal(str, object)   # (选中项 key, {(direction, action)})
+    blank_ready = Signal(str, int, object)   # (选中项 key, 代数, {(direction, action)})
 
-    def __init__(self, matrix: dict, key: str, parent=None):
+    def __init__(self, matrix: dict, key: str, gen: int = 0, parent=None):
         super().__init__(parent)
         self._matrix = matrix
         self._key = key
+        self._gen = gen
 
     def run(self) -> None:
-        self.blank_ready.emit(self._key, blank_sequences(self._matrix))
+        self.blank_ready.emit(self._key, self._gen, blank_sequences(self._matrix))
 
 
 class MainWindow(QMainWindow):
@@ -123,6 +133,7 @@ class MainWindow(QMainWindow):
         # M36：空帧抽样缓存 {选中项key: {(方向,动作)}}（会话级内存缓存，二次选中零 IO）
         self._blank_cache: dict[str, set] = {}
         self._blank_workers: list[_BlankCheckWorker] = []
+        self._blank_generation = 0
         # M30：快捷文件夹（收藏 + 最近拖入），QSettings 持久化
         self._quick_favs: list[str] = []
         self._quick_recents: list[str] = []
@@ -233,6 +244,7 @@ class MainWindow(QMainWindow):
         self.part_list.group_selected.connect(self._on_group_selected)
         # 「📖 选择匹配表」按钮 → 打开文件选择，选完自动刷新左栏中文名
         self.part_list.pick_namemap.connect(self._pick_map_file)
+        self.part_list.clean_extra_requested.connect(self._on_part_list_clean_extra_requested)
         splitter.addWidget(self.part_list)
 
         right = QWidget()
@@ -252,6 +264,8 @@ class MainWindow(QMainWindow):
         self.matrix = ButtonMatrix()
         self.matrix.direction_selected.connect(self._on_direction_selected)
         self.matrix.action_selected.connect(self._on_action_selected)
+        self.matrix.delete_action_requested.connect(self._on_delete_action_requested)
+        self.matrix.clean_extra_requested.connect(self._on_matrix_clean_extra_requested)
         # 「显向」toggle → 画布 overlay 开关；overlay 方向点击 → 等同方向按钮点击
         self.matrix.overlay_toggled.connect(self.anim_view.set_dir_overlay_enabled)
         self.anim_view.direction_overlay_clicked.connect(self._on_direction_selected)
@@ -294,6 +308,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("⚠ 无可用模板（templates/ 为空）")
             return
         self._last_folder = folder
+        self._blank_generation += 1
         from .core.atlas import clear_atlas_cache
         clear_atlas_cache()
         self._result = scan_root(folder, self._tpl, char_type_of=self._namemap.char_type)
@@ -482,6 +497,13 @@ class MainWindow(QMainWindow):
             if paused:
                 self.anim_view.set_resume_state(True, idx)
             self._after_matrix_change()
+        elif self._result is not None and not self._result.parts:
+            self.grid_view.show_sequence([])
+            self.anim_view.show_sequence([])
+            self.anim_view.hide_part_toggles()
+            self.anim_view.update_hud(None)
+            if self._tpl is not None:
+                self.matrix.set_template(self._tpl)
         self.statusBar().showMessage("📡 检测到文件变更，已自动刷新")
 
     def _on_auto_refresh_toggled(self, checked: bool) -> None:
@@ -1135,13 +1157,15 @@ class MainWindow(QMainWindow):
         target = self._blank_target_matrix()
         if not target:
             return
-        worker = _BlankCheckWorker(target, key)
+        worker = _BlankCheckWorker(target, key, self._blank_generation)
         worker.blank_ready.connect(self._on_blank_ready)
         worker.finished.connect(self._on_blank_worker_finished)
         self._blank_workers.append(worker)
         worker.start()
 
-    def _on_blank_ready(self, key: str, blank: set) -> None:
+    def _on_blank_ready(self, key: str, gen: int, blank: set) -> None:
+        if gen != self._blank_generation:
+            return
         self._blank_cache[key] = blank
         if key == self._blank_key():
             # 仍停留在该选中项 → **就地**刷新角标与状态栏（不重建按钮、不动 A/B 区，
@@ -1155,13 +1179,29 @@ class MainWindow(QMainWindow):
             self._blank_workers.remove(w)
         w.deleteLater()
 
+    def _owning_group(self, part: PartData) -> IdGroup | None:
+        if self._result is None:
+            return None
+        return next((g for g in self._result.groups if part in g.parts), None)
+
     def _update_matrix(self, direction: str | None, action: str | None) -> None:
         # M36：先回填空帧角标数据（缓存命中同步；未命中置空并后台抽样）
         self._sync_blank_check()
         if self._group is not None:
-            self.matrix.show_group(self._group, direction, action)
+            part_groups = (
+                {str(p.folder): g for g in self._result.groups for p in g.parts}
+                if self._result else {}
+            )
+            self.matrix.show_group(
+                self._group, direction, action,
+                display_parts=self._display_parts(self._group),
+                part_groups=part_groups,
+            )
         elif self._part is not None:
-            self.matrix.show_part(self._part, direction, action)
+            self.matrix.show_part(
+                self._part, direction, action,
+                group=self._owning_group(self._part),
+            )
 
     def _layers_for_current(self) -> tuple[
         list[list[Path]], list[bool], dict[int, tuple[int, int]], list[str]
@@ -1476,6 +1516,115 @@ class MainWindow(QMainWindow):
         order = [d for d in (self._tpl.directions if self._tpl else []) if d in extra] \
             or sorted(extra.keys())
         return "；".join(f"{d}: " + ", ".join(extra[d]) for d in order)
+
+    # ---------------- M43：多余动作识别与安全清理（移入回收站） ----------------
+    def _stop_all_workers_and_caches(self) -> None:
+        self._rescan_timer.stop()
+        old_dirs = self._dir_watcher.directories()
+        if old_dirs:
+            self._dir_watcher.removePaths(old_dirs)
+        self.grid_view._stop_worker()
+        self.anim_view._stop_worker()
+        for w in list(self._blank_workers):
+            if w.isRunning():
+                w.requestInterruption()
+                w.wait()
+        from .core.atlas import clear_atlas_cache
+        clear_atlas_cache()
+
+    def _current_cleanup_targets(self) -> tuple[list[PartData], IdGroup | None]:
+        if self._part is not None:
+            return ([] if self._part.is_flat else [self._part]), self._owning_group(self._part)
+        if self._group is not None:
+            return cleanup_target_parts(self._display_parts(self._group)), self._group
+        return [], None
+
+    def _execute_trash_items(self, items: list[CleanupItem], trash_fn=None) -> tuple[int, int]:
+        """执行移入回收站并自动重扫刷新（无模态弹窗，供交互入口与测试复用）。"""
+        if not items:
+            return 0, 0
+        all_paths = [path for item in items for path in item.paths]
+        self._blank_generation += 1
+        self._stop_all_workers_and_caches()
+        try:
+            moved, failed = move_to_trash(all_paths, trash_fn=trash_fn)
+        finally:
+            self._rescan_timer.stop()
+        moved_set = {os.path.normcase(os.path.abspath(str(x))) for x in moved}
+        ok_items = sum(
+            1 for item in items
+            if all(os.path.normcase(os.path.abspath(str(x))) in moved_set for x in item.paths)
+        )
+        if moved:
+            self._blank_cache.clear()
+            self._auto_rescan()
+        elif self._result is not None and self._auto_refresh:
+            self._setup_dir_watcher(self._result.root)
+        if failed:
+            first_path, first_err = failed[0]
+            self.statusBar().showMessage(
+                f"⚠ 已移入回收站 {ok_items} 项，{len(failed)} 个路径失败：{first_path.name}（{first_err}）",
+                6000,
+            )
+        elif ok_items:
+            self.statusBar().showMessage(
+                f"🗑 已将 {ok_items} 项移入回收站（可从系统回收站还原）",
+                5000,
+            )
+        return ok_items, len(failed)
+
+    def _confirm_and_trash(self, items: list[CleanupItem], title: str) -> None:
+        if not items:
+            self.statusBar().showMessage("ℹ 当前无可清理的磁盘动作资源", 3000)
+            return
+        dlg = CleanupConfirmDialog(items, title=title, parent=self)
+        if dlg.exec() != CleanupConfirmDialog.DialogCode.Accepted:
+            return
+        chosen = dlg.selected_items()
+        if not chosen:
+            return
+        _ok_cnt, fail_cnt = self._execute_trash_items(chosen)
+        if fail_cnt:
+            QMessageBox.warning(
+                self,
+                "部分清理失败",
+                f"有 {fail_cnt} 个文件或目录未能移入回收站（可能正被外部程序占用）。",
+            )
+
+    def _on_delete_action_requested(self, direction: str, action: str) -> None:
+        if self._tpl is None:
+            return
+        targets, grp = self._current_cleanup_targets()
+        items = collect_action_cleanup_items(targets, direction, action, self._tpl, grp)
+        self._confirm_and_trash(items, f"移入回收站：删除 {direction}/{action}")
+
+    def _on_matrix_clean_extra_requested(self) -> None:
+        if self._tpl is None:
+            return
+        targets, grp = self._current_cleanup_targets()
+        items = [
+            it for p in targets
+            for it in collect_extra_cleanup_items([p], self._tpl, self._owning_group(p) or grp)
+        ]
+        self._confirm_and_trash(items, "清理当前项多余动作")
+
+    def _on_part_list_clean_extra_requested(self, key: str) -> None:
+        if self._tpl is None or self._result is None:
+            return
+        if key.startswith("GRP:"):
+            grp = next((g for g in self._result.groups if g.key == key[4:]), None)
+            if grp is None or grp.is_flat:
+                return
+            targets = cleanup_target_parts(grp.parts)
+            items = collect_extra_cleanup_items(targets, self._tpl, grp)
+            label = grp.display_name or grp.res_id
+        else:
+            pd = self.part_list._parts.get(key)
+            if pd is None or pd.is_flat:
+                return
+            items = collect_extra_cleanup_items([pd], self._tpl, self._owning_group(pd))
+            label = pd.name
+        self._confirm_and_trash(items, f"清理多余动作 · {label}")
 
     def _on_template_changed(self, index: int) -> None:
         if 0 <= index < len(self._templates):
