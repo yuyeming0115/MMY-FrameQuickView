@@ -89,3 +89,4 @@
     chips 开关/无配对退化/fills 默认值）；全量 33 套测试通过。
   - 已知边界：hidden_parts 的 key 全局记忆（跨形象共用 body/hair/weapon 等 key，
     关掉一个形象的「头发」其他同 key 一起隐藏）——沿用既有机制，如需按形象记忆再迭代。
+- 2026-11-23（M42）：`templates/default.json` `look_types` 新增 `"装"`；`Template.look_split` 改为按匹配结束位置 `end` 优先、同 `end` 取更长词，支持单字「装」后缀同时防止截胡「时装」（详见 [M42 开发文档](file:///d:/GitWork/MMY-FrameQuickView/%E5%BC%80%E5%8F%91%E6%96%87%E6%A1%A3/M42-%E7%B1%BB%E5%9E%8B%E8%AF%8D%E5%AE%B9%E9%94%99%E4%B8%8E%E6%97%B6%E8%A3%85%E8%87%AA%E5%8A%A8%E5%8C%B9%E9%85%8D%E6%AD%A6%E5%99%A8.md)）。

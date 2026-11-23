@@ -112,8 +112,10 @@
   "default_character_type": "non_protagonist",
   "look_types": [
     "武器",
+    "职业装",
     "职业",
     "时装",
+    "装",
     "发"
   ],
   "action_rules": {
