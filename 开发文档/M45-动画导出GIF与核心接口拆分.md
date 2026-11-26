@@ -418,3 +418,5 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe scripts/golden_frames.py chec
 | 2026-11-26 | 阶段 A 第一步：新增 `scripts/golden_frames.py`（record / check 逐帧指纹比对，只读） |
 | 2026-11-26 | 首次 record：角色输出图 148 组合 / 2376 帧，未改代码 check 148/148 一致（可重复）；补充自动生成套装目录 + local-role 图集目录 |
 | 2026-11-26 | 修复 golden 脚本组合编号冲突：local-role 由角色输出图打包，两边 ID 相同，后录的覆盖先录的（148→36）；组合编号加目录名前缀；record 附带比对「同一资源图集 vs 散帧」像素是否一致（只提示） |
+| 2026-11-26 | **阶段 A-1 渲染拆分**：新增 `src/core/render.py`（`SequenceRender` 类 + `render_frames()` 简便函数，无 Qt 依赖），算法从 `DecodeWorker.run` 原样搬入（逐行比对：仅结构调整——局部函数改为模块级/方法、emit 改 yield、新增可选 `should_stop`）；`ui/worker.py` 改为薄壳，对外接口不变。待 golden check 308/308 确认 |
+| 2026-11-26 | 待办：local-role 图集与角色输出图散帧同资源像素对比——画布对齐 90/110 一致、并集 bbox 0/110 一致；疑为图集 bbox 取 TexturePacker 记录范围、散帧取实际 alpha 范围。M40 文档「像素级 0 误差」需复核（不影响 golden，golden 各目录自比） |
