@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><style id="qw-theme">:root {
+  --color-bg: #faf9fc !important;
+  --color-text: #131920 !important;
+  --chat-column-base: 720px !important;
+  --chat-column-max: clamp(888px, 50vw, 1200px) !important;
+  --color-navbar-bg: #f9f9fb !important;
+  --color-navbar-fg: #131920 !important;
+  --color-navbar-divider: #0000001f !important;
+  --color-leftnav-bg: #fff !important;
+  --color-bg-chat-view: #f9f9fb !important;
+  --color-bg-secondary: #fff !important;
+  --color-bg-tertiary: #f9fafb !important;
+  --color-bg-hover: #f3f4f6 !important;
+  --color-surface: #f9fafb !important;
+  --color-surface-hover: #f3f4f6 !important;
+  --color-surface-active: #e5e7eb !important;
+  --color-border: #0000001f !important;
+  --color-border-light: #0000000f !important;
+  --color-border-strong: #d1d5db !important;
+  --background-toggle-off-default: #fff0 !important;
+  --color-primary: #4200db !important;
+  --color-primary-dark: #35009e !important;
+  --color-primary-light: #8575ff !important;
+  --color-primary-bg: #e8e6ff !important;
+  --color-primary-hover-border: #35009e !important;
+  --color-nav-icon-active: #4200db !important;
+  --color-nav-hover-border: #4200db !important;
+  --color-primary-alpha-3: color-mix(in srgb, #4200db 3%, transparent) !important;
+  --color-primary-alpha-5: color-mix(in srgb, #4200db 5%, transparent) !important;
+  --color-primary-alpha-8: color-mix(in srgb, #4200db 8%, transparent) !important;
+  --color-primary-alpha-12: color-mix(in srgb, #4200db 12%, transparent) !important;
+  --color-primary-alpha-15: color-mix(in srgb, #4200db 15%, transparent) !important;
+  --color-primary-alpha-20: color-mix(in srgb, #4200db 20%, transparent) !important;
+  --color-primary-alpha-25: color-mix(in srgb, #4200db 25%, transparent) !important;
+  --color-primary-alpha-30: color-mix(in srgb, #4200db 30%, transparent) !important;
+  --color-primary-alpha-40: color-mix(in srgb, #4200db 40%, transparent) !important;
+  --color-primary-alpha-50: color-mix(in srgb, #4200db 50%, transparent) !important;
+  --color-primary-alpha-60: color-mix(in srgb, #4200db 60%, transparent) !important;
+  --color-primary-subtle: color-mix(in srgb, #4200db 12%, transparent) !important;
+  --color-primary-border: color-mix(in srgb, #4200db 30%, transparent) !important;
+  --color-focus-ring: #4200db !important;
+  --color-sidebar-hover: color-mix(in srgb, #4200db 12%, transparent) !important;
+  --color-sidebar-hover-solid: color-mix(in srgb, #4200db 12%, #faf9fc) !important;
+  --block-selection-outline-offset: 2px !important;
+  --color-accent: #4200db !important;
+  --color-accent-foreground: #4200db !important;
+  --color-accent-dark: #35009e !important;
+  --color-accent-light: #e8e6ff !important;
+  --color-accent-inverse: #fff !important;
+  --color-link: #4200db !important;
+  --color-brand-ai-gradient-start: #6842ff !important;
+  --color-brand-ai-gradient-mid: #d600ba !important;
+  --color-brand-ai-gradient-end: #ff4b14 !important;
+  --color-brand-kiro: #9147ff !important;
+  --color-primary-gradient-end: #e8e6ff !important;
+  --color-primary-bg-solid: #e8e6ff !important;
+  --color-user-bubble: #f3f3f7 !important;
+  --color-user-bubble-text: #131920 !important;
+  --color-text-secondary: #5e5e5e !important;
+  --color-text-tertiary: #656871 !important;
+  --color-text-muted: #656871 !important;
+  --color-text-on-primary: #fff !important;
+  --color-success: #00802f !important;
+  --color-success-dark: #00471e !important;
+  --color-success-light: #d9ffd6 !important;
+  --color-success-hover: #005c26 !important;
+  --color-success-bg: #e6f5eb !important;
+  --color-success-border: #b3d9bf !important;
+  --color-success-foreground: #00802f !important;
+  --color-success-dark-foreground: #00471e !important;
+  --color-success-text: #00471e !important;
+  --color-error: #db0000 !important;
+  --color-error-dark: #700000 !important;
+  --color-error-light: #ffe0e0 !important;
+  --color-error-hover: #ffe0e0 !important;
+  --color-error-bg: #fceaea !important;
+  --color-error-border: #f2cccc !important;
+  --color-error-active-border: #db0000 !important;
+  --color-error-foreground: #db0000 !important;
+  --color-error-dark-foreground: #700000 !important;
+  --color-error-inverse: #fff !important;
+  --color-error-text: #700000 !important;
+  --color-warning: #f2b100 !important;
+  --color-warning-dark: #573a00 !important;
+  --color-warning-light: #fffbbd !important;
+  --color-warning-hover: #db9200 !important;
+  --color-warning-bg: #fef7e6 !important;
+  --color-warning-border: #f9dfa3 !important;
+  --color-warning-foreground: #f2b100 !important;
+  --color-warning-dark-foreground: #573a00 !important;
+  --color-warning-inverse: #573a00 !important;
+  --color-surface-warning: #fffbbd !important;
+  --color-text-warning: #573a00 !important;
+  --color-info: #006ce0 !important;
+  --color-info-dark: #002a66 !important;
+  --color-info-light: #d1f1ff !important;
+  --color-info-hover: #003b8f !important;
+  --color-info-bg: #ebf3fc !important;
+  --color-info-border: #b3d1f0 !important;
+  --color-info-foreground: #006ce0 !important;
+  --color-info-dark-foreground: #002a66 !important;
+  --color-info-inverse: #fff !important;
+  --color-overlay: #00000080 !important;
+  --color-shadow: #00000014 !important;
+  --color-hover: #0000000d !important;
+  --color-tooltip-bg: #000000d9 !important;
+  --color-tooltip-text: #fff !important;
+  --color-voice-purple: #8575ff !important;
+  --color-voice-purple-dark: #4200db !important;
+  --color-voice-purple-light: #8575ff !important;
+  --color-voice-red: #db0000 !important;
+  --color-voice-red-dark: #700000 !important;
+  --color-voice-amber: #f2b100 !important;
+  --color-voice-purple-glow: #4200db66 !important;
+  --color-voice-red-glow: #db000066 !important;
+  --font-sans: "Amazon Ember", "Helvetica Neue", "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+  --font-mono: "SF Mono", "Monaco", "Menlo", "Consolas", monospace !important;
+  --text-2xs: .5625rem !important;
+  --text-xs: .625rem !important;
+  --text-sm: .6875rem !important;
+  --text-base: .75rem !important;
+  --text-md: .8125rem !important;
+  --text-lg: .875rem !important;
+  --text-xl: 1rem !important;
+  --text-2xl: 1.125rem !important;
+  --text-3xl: 1.25rem !important;
+  --text-4xl: 1.5rem !important;
+  --text-5xl: 2rem !important;
+  --spacing-1: calc(.25rem * 1) !important;
+  --spacing-1-5: calc(.25rem * 1.5) !important;
+  --spacing-2: calc(.25rem * 2) !important;
+  --spacing-3: calc(.25rem * 3) !important;
+  --spacing-4: calc(.25rem * 4) !important;
+  --spacing-5: calc(.25rem * 5) !important;
+  --spacing-6: calc(.25rem * 6) !important;
+  --spacing-7: calc(.25rem * 7) !important;
+  --spacing-8: calc(.25rem * 8) !important;
+  --spacing-9: calc(.25rem * 9) !important;
+  --spacing-10: calc(.25rem * 10) !important;
+  --border-radius-rounded-lg: 8px !important;
+  --radius-sm: 6px !important;
+  --radius-md: 10px !important;
+  --radius-card: 12px !important;
+  --radius-lg: 16px !important;
+  --radius-pill: 8px !important;
+  --shadow-sm: 0 1px 2px #0000000d !important;
+  --shadow-md: 0 4px 12px #00000014 !important;
+  --shadow-lg: 0 4px 16px 4px #00000029, 0 2px 6px 1px #00000029 !important;
+  --color-success-bg-solid: #d9ffd6 !important;
+  --color-error-bg-solid: #ffe0e0 !important;
+  --color-error-border-solid: #ffe0e0 !important;
+  --color-warning-bg-solid: #fffbbd !important;
+  --color-warning-text: #573a00 !important;
+  --color-info-bg-solid: #d1f1ff !important;
+  --color-info-bg-solid-alt: #d1f1ff !important;
+  --color-info-text: #002a66 !important;
+  --color-info-text-alt: #002a66 !important;
+  --color-emerald: #10b981 !important;
+  --color-teal: #4ecdc4 !important;
+  --color-code-bg: #f3f3f7 !important;
+  --color-code-header-bg: #f1f3f5 !important;
+  --color-code-text: #24292e !important;
+  --color-code-border: #e1e4e8 !important;
+  --color-code-muted: #6a737d !important;
+  --color-inline-code-bg: #f3f3f7 !important;
+  --color-inline-code-text: #24292e !important;
+  --color-inline-code-border: #e1e4e8 !important;
+  --color-scrollbar-thumb: #d1d5db !important;
+  --color-scrollbar-track: transparent !important;
+  --qs-data-cat-01: #4338ca !important;
+  --qs-data-cat-02: #d97706 !important;
+  --qs-data-cat-03: #0891b2 !important;
+  --qs-data-cat-04: #8b5cf6 !important;
+  --qs-data-cat-05: #15803d !important;
+  --qs-data-cat-06: #0c4a6e !important;
+  --qs-data-cat-07: #d946ef !important;
+  --qs-data-cat-08: #65a30d !important;
+  --qs-data-cat-09: #1d4ed8 !important;
+  --qs-data-cat-10: #831843 !important;
+  --qs-data-cat-11: #c2410c !important;
+  --qs-data-cat-12: #115e59 !important;
+  --qs-data-cat-other: #737373 !important;
+  --qs-content: #fff !important;
+  --qs-main: #f9f9fb !important;
+  --qs-primary-foreground: #131920 !important;
+  --qs-secondary-foreground: #656871 !important;
+  --qs-tertiary-foreground: #656871 !important;
+  --qs-placeholder-foreground: #656871 !important;
+  --qs-divider: #dedee3 !important;
+  --qs-default-border: #8c8c94 !important;
+  --qs-neutral-soft: #b4b4bb !important;
+  --qs-neutral-gray-50: #f9fafb !important;
+  --qs-tertiary-background: #f9fafb !important;
+  --qs-action-hover: #f3f3f7 !important;
+  --qs-primary-default: #4200db !important;
+  --qs-primary-dark: #35009e !important;
+  --qs-primary-medium: #8575ff !important;
+  --qs-primary-light: #e8e6ff !important;
+  --qs-primary-inverse: #fff !important;
+  --qs-success-default: #00802f !important;
+  --qs-success-dark: #00471e !important;
+  --qs-success-light: #d9ffd6 !important;
+  --qs-error-default: #db0000 !important;
+  --qs-error-dark: #700000 !important;
+  --qs-warning-default: #f2b100 !important;
+  --qs-warning-dark: #573a00 !important;
+  --qs-warning-light: #fffbbd !important;
+  --qs-info-default: #006ce0 !important;
+  --qs-info-dark: #002a66 !important;
+  --qs-font-sans: "Amazon Ember", "Helvetica Neue", "Segoe UI", Helvetica, Arial, sans-serif !important;
+  --safe-top: 0px !important;
+  --safe-bottom: 0px !important;
+  --safe-left: 0px !important;
+  --safe-right: 0px !important;
+  --qs-action-active: #e8e6ff !important;
+  --qs-action-active-hover: #b2a8ff !important;
+  --qs-action-disabled: #f3f3f7 !important;
+  --qs-active-border: #4200db !important;
+  --qs-application-navbar: #4200db !important;
+  --qs-application-navbar-dark: #35009e !important;
+  --qs-application-navbar-foreground: #fff !important;
+  --qs-application-navbar-light: #e8e6ff !important;
+  --qs-automation-dark: #660052 !important;
+  --qs-automation-default: #d600ba !important;
+  --qs-automation-light: #ffe0fb !important;
+  --qs-automation-medium: #b3008f !important;
+  --qs-automation-soft: #ff94f1 !important;
+  --qs-avatar-blue-bg: #d1f1ff !important;
+  --qs-avatar-blue-fg: #002a66 !important;
+  --qs-avatar-fuchsia-bg: #fce6ff !important;
+  --qs-avatar-fuchsia-fg: #590066 !important;
+  --qs-avatar-green-bg: #d9ffd6 !important;
+  --qs-avatar-green-fg: #00471e !important;
+  --qs-avatar-neutral-bg: #dedee3 !important;
+  --qs-avatar-neutral-fg: #131920 !important;
+  --qs-avatar-orange-bg: #ffe0d6 !important;
+  --qs-avatar-orange-fg: #661800 !important;
+  --qs-avatar-pink-bg: #ffe0fb !important;
+  --qs-avatar-pink-fg: #660052 !important;
+  --qs-avatar-primary-bg: #e8e6ff !important;
+  --qs-avatar-primary-fg: #35009e !important;
+  --qs-avatar-red-bg: #ffe0e0 !important;
+  --qs-avatar-red-fg: #700000 !important;
+  --qs-avatar-violet-bg: #f2e5ff !important;
+  --qs-avatar-violet-fg: #45008a !important;
+  --qs-avatar-yellow-bg: #fffbbd !important;
+  --qs-avatar-yellow-fg: #573a00 !important;
+  --qs-blue-100: #e2ebff !important;
+  --qs-blue-1000: #060d27 !important;
+  --qs-blue-200: #c2d5ff !important;
+  --qs-blue-300: #9fbdff !important;
+  --qs-blue-400: #7ea0fc !important;
+  --qs-blue-50: #fafbff !important;
+  --qs-blue-500: #517df6 !important;
+  --qs-blue-600: #2d5fe8 !important;
+  --qs-blue-700: #1d3cb9 !important;
+  --qs-blue-800: #162c85 !important;
+  --qs-blue-900: #102165 !important;
+  --qs-blue-950: #0b1746 !important;
+  --qs-brand: #fff !important;
+  --qs-brand-foreground: #131920 !important;
+  --qs-brand-navbar: #131920 !important;
+  --qs-brand-navbar-dark: #000 !important;
+  --qs-brand-navbar-foreground: #fff !important;
+  --qs-brand-navbar-light: #dedee3 !important;
+  --qs-coachmark: #006ce0 !important;
+  --qs-connection-dark: #661800 !important;
+  --qs-connection-default: #db3300 !important;
+  --qs-connection-light: #ffe0d6 !important;
+  --qs-connection-soft: #ff997a !important;
+  --qs-content-inverse: #333843 !important;
+  --qs-content-inverse-active: #131920 !important;
+  --qs-contrast-foreground: #131920 !important;
+  --qs-control-selected-bg: #4200db !important;
+  --qs-control-selected-hover-bg: #35009e !important;
+  --qs-darkpurple1-100: #eee1ef !important;
+  --qs-darkpurple1-1000: #130b14 !important;
+  --qs-darkpurple1-200: #dcc0dd !important;
+  --qs-darkpurple1-300: #c99ecc !important;
+  --qs-darkpurple1-400: #b57ab8 !important;
+  --qs-darkpurple1-50: #f8f2f8 !important;
+  --qs-darkpurple1-500: #97529b !important;
+  --qs-darkpurple1-600: #754078 !important;
+  --qs-darkpurple1-700: #542e57 !important;
+  --qs-darkpurple1-800: #472749 !important;
+  --qs-darkpurple1-900: #341c35 !important;
+  --qs-darkpurple1-950: #241325 !important;
+  --qs-darkpurple2-100: #f1e3fc !important;
+  --qs-darkpurple2-1000: #1b042f !important;
+  --qs-darkpurple2-200: #e7d0fb !important;
+  --qs-darkpurple2-300: #d6b0f8 !important;
+  --qs-darkpurple2-400: #be81f3 !important;
+  --qs-darkpurple2-50: #f8f1fe !important;
+  --qs-darkpurple2-500: #a652ef !important;
+  --qs-darkpurple2-600: #8e24eb !important;
+  --qs-darkpurple2-700: #7413c9 !important;
+  --qs-darkpurple2-800: #580e98 !important;
+  --qs-darkpurple2-900: #36095d !important;
+  --qs-darkpurple2-950: #260642 !important;
+  --qs-data-categorical-01: #4338ca !important;
+  --qs-data-categorical-02: #d97706 !important;
+  --qs-data-categorical-03: #0891b2 !important;
+  --qs-data-categorical-04: #8b5cf6 !important;
+  --qs-data-categorical-05: #15803d !important;
+  --qs-data-categorical-06: #0c4a6e !important;
+  --qs-data-categorical-07: #d946ef !important;
+  --qs-data-categorical-08: #65a30d !important;
+  --qs-data-categorical-09: #1d4ed8 !important;
+  --qs-data-categorical-10: #831843 !important;
+  --qs-data-categorical-11: #c2410c !important;
+  --qs-data-categorical-12: #115e59 !important;
+  --qs-data-categorical-other: #737373 !important;
+  --qs-data-divergent-negative: #ea580c !important;
+  --qs-data-divergent-positive: #4f46e5 !important;
+  --qs-data-divergent-red-green-negative: #dc2626 !important;
+  --qs-data-divergent-red-green-positive: #16a34a !important;
+  --qs-data-missing: #d4d4d4 !important;
+  --qs-data-sentiment-neutral: #737373 !important;
+  --qs-data-sentiment-warning: #9e6900 !important;
+  --qs-data-sequential-duochromatic-high: #1e1b4b !important;
+  --qs-data-sequential-duochromatic-low: #8b5cf6 !important;
+  --qs-data-sequential-monochromatic-high: #4f46e5 !important;
+  --qs-default-badge: #b4b4bb !important;
+  --qs-default-badge-dot: #656871 !important;
+  --qs-dimension: #4200db !important;
+  --qs-dimension-experimental: #4200db !important;
+  --qs-dimension-experimental-foreground: #4200db !important;
+  --qs-dimension-foreground: #fff !important;
+  --qs-disabled: #8c8c94 !important;
+  --qs-disabled-border: #dedee3 !important;
+  --qs-disabled-foreground: #b4b4bb !important;
+  --qs-divider-light: #f3f3f7 !important;
+  --qs-error-active-border: #db0000 !important;
+  --qs-error-border: #ffe0e0 !important;
+  --qs-error-foreground: #db0000 !important;
+  --qs-error-inverse: #fff !important;
+  --qs-error-light: #ffe0e0 !important;
+  --qs-error-medium: #900 !important;
+  --qs-error-soft: #ff9e9e !important;
+  --qs-focus-offset: 1px !important;
+  --qs-font-base-letter-spacing: .15px !important;
+  --qs-font-display: "Amazon Ember", "Helvetica Neue", "Segoe UI", Helvetica, Arial, sans-serif !important;
+  --qs-font-family: "Amazon Ember", "Helvetica Neue", "Segoe UI", Helvetica, Arial, sans-serif !important;
+  --qs-gradient-automation-light-stop: #ffe0fb !important;
+  --qs-gradient-automation-medium-stop: #b3008f !important;
+  --qs-gradient-automation-stop: #d600ba !important;
+  --qs-gradient-connection-light-stop: #ffe0d6 !important;
+  --qs-gradient-connection-stop: #db3300 !important;
+  --qs-gradient-insight-light-stop: #fce6ff !important;
+  --qs-gradient-insight-stop: #a000b8 !important;
+  --qs-gradient-visualization-light-stop: #f2e5ff !important;
+  --qs-gradient-visualization-stop: #7300e5 !important;
+  --qs-green-100: #ccffd8 !important;
+  --qs-green-1000: #001409 !important;
+  --qs-green-200: #a9efba !important;
+  --qs-green-300: #84d39a !important;
+  --qs-green-400: #71c68c !important;
+  --qs-green-50: #f0fff3 !important;
+  --qs-green-500: #5bbe7a !important;
+  --qs-green-600: #3c955a !important;
+  --qs-green-700: #227340 !important;
+  --qs-green-800: #00441f !important;
+  --qs-green-900: #003317 !important;
+  --qs-green-950: #002410 !important;
+  --qs-grid-gap: 16px !important;
+  --qs-grid-gap-xl: 24px !important;
+  --qs-hero-banner-button-hover: color-mix(in srgb, #fff, transparent 60%) !important;
+  --qs-hover-border: #333843 !important;
+  --qs-info-inverse: #fff !important;
+  --qs-info-light: #d1f1ff !important;
+  --qs-info-medium: #003b8f !important;
+  --qs-info-soft: #75cfff !important;
+  --qs-insight-dark: #590066 !important;
+  --qs-insight-default: #a000b8 !important;
+  --qs-insight-light: #fce6ff !important;
+  --qs-insight-soft: #f299ff !important;
+  --qs-main-foreground: #131920 !important;
+  --qs-main-secondary-foreground: #656871 !important;
+  --qs-measure: #00802f !important;
+  --qs-measure-experimental: #f2b100 !important;
+  --qs-measure-experimental-foreground: #f2b100 !important;
+  --qs-measure-foreground: #fff !important;
+  --qs-neutral-0: #fff !important;
+  --qs-neutral-100: #f5f3ef !important;
+  --qs-neutral-1000: #0b0a0a !important;
+  --qs-neutral-200: #ece9e4 !important;
+  --qs-neutral-300: #e2dfda !important;
+  --qs-neutral-400: #cdc9c1 !important;
+  --qs-neutral-50: #faf9f7 !important;
+  --qs-neutral-500: #adaaa3 !important;
+  --qs-neutral-600: #94918b !important;
+  --qs-neutral-700: #7d7a73 !important;
+  --qs-neutral-800: #5e5b56 !important;
+  --qs-neutral-900: #302f2c !important;
+  --qs-neutral-950: #151310 !important;
+  --qs-neutral-black: #000 !important;
+  --qs-neutral-dark: #333843 !important;
+  --qs-neutral-deep: #656871 !important;
+  --qs-neutral-default: #dedee3 !important;
+  --qs-neutral-light: #f3f3f7 !important;
+  --qs-neutral-lightest: #f9f9fb !important;
+  --qs-neutral-medium: #8c8c94 !important;
+  --qs-neutral-strong: #131920 !important;
+  --qs-neutral-white: #fff !important;
+  --qs-overlay: color-mix(in srgb, #131920, transparent 50%) !important;
+  --qs-popover-border: transparent !important;
+  --qs-primary-inverse-foreground: #fff !important;
+  --qs-primary-soft: #b2a8ff !important;
+  --qs-progress-active: #4200db !important;
+  --qs-red-100: #ffe4e1 !important;
+  --qs-red-1000: #240004 !important;
+  --qs-red-200: #ffc7c2 !important;
+  --qs-red-300: #ffa099 !important;
+  --qs-red-400: #eb6560 !important;
+  --qs-red-50: #fff6f5 !important;
+  --qs-red-500: #c33c38 !important;
+  --qs-red-600: #aa2b2b !important;
+  --qs-red-700: #8a0f0f !important;
+  --qs-red-800: #6e000d !important;
+  --qs-red-900: #57000a !important;
+  --qs-red-950: #3d0007 !important;
+  --qs-secondary: #dedee3 !important;
+  --qs-secondary-dark: #b4b4bb !important;
+  --qs-secondary-light: #f3f3f7 !important;
+  --qs-shadow: #00000029 !important;
+  --qs-shadow-lg: 0 4px 16px 4px #00000029, 0 2px 6px 1px #00000029 !important;
+  --qs-shadow-md: 0 0 2px 0 #00000029, 0 2px 8px 1px #00000029 !important;
+  --qs-shadow-pin-left: inset -4px 0 4px -4px #00000029 !important;
+  --qs-shadow-pin-right: inset 4px 0 4px -4px #00000029 !important;
+  --qs-shadow-sm: 0 0 2px 0 #00000029, 0 0 4px 0 #00000029 !important;
+  --qs-shadow-xl: 0 4px 8px 2px #00000029, 0 6px 20px 4px #00000029 !important;
+  --qs-spice: #ff9800 !important;
+  --qs-success-inverse: #fff !important;
+  --qs-success-medium: #005c26 !important;
+  --qs-success-soft: #aeffa8 !important;
+  --qs-tag-default: #dedee3 !important;
+  --qs-tag-soft-border: #b4b4bb !important;
+  --qs-toggle-tile-lg: calc(.25rem * 15) !important;
+  --qs-toggle-tile-md: calc(.25rem * 12) !important;
+  --qs-toggle-tile-sm: calc(.25rem * 8) !important;
+  --qs-transparent: transparent !important;
+  --qs-visualization-dark: #45008a !important;
+  --qs-visualization-default: #7300e5 !important;
+  --qs-visualization-light: #f2e5ff !important;
+  --qs-visualization-soft: #d4a8ff !important;
+  --qs-warning-experimental: #f2b100 !important;
+  --qs-warning-experimental-light: #fffbbd !important;
+  --qs-warning-experimental-light-foreground: #fffbbd !important;
+  --qs-warning-inverse: #573a00 !important;
+  --qs-warning-medium: #db9200 !important;
+  --qs-warning-soft: #ffed4d !important;
+  --qs-width-modal-lg: 1136px !important;
+  --qs-width-modal-md: 600px !important;
+  --qs-width-modal-sm: 384px !important;
+  --qs-yellow-100: #fff5cf !important;
+  --qs-yellow-1000: #1f1100 !important;
+  --qs-yellow-200: #ffe79e !important;
+  --qs-yellow-300: #fbd86f !important;
+  --qs-yellow-400: #facb3d !important;
+  --qs-yellow-50: #fffcf0 !important;
+  --qs-yellow-500: #e2ac36 !important;
+  --qs-yellow-600: #ca8d2b !important;
+  --qs-yellow-700: #9d672f !important;
+  --qs-yellow-800: #7a4c19 !important;
+  --qs-yellow-900: #522e00 !important;
+  --qs-yellow-950: #381f00 !important;
+  --qs-duration-reorder: .125s !important;
+  --qs-ease-reorder: ease-in-out !important;
+  --z-subtask-modal: 10000 !important;
+  --z-above-subtask-modal: 10001 !important;
+}</style>
+<title>MMY-FrameQuickView 改版线框</title>
+<style>
+:root{
+  --page-bg:#1E2023; --page-card:#2A2E33; --page-border:#3A3F46; --page-gold:#D4AF37;
+  --page-text:#E8E4D9; --page-muted:#96A1AD; --page-red:#C74444; --page-amber:#E8A33D;
+  --page-font:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;
+  --page-mono:Consolas,"Cascadia Mono",monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page-bg);font-family:var(--page-font);color:var(--page-text);font-size:14px}
+.wrap{overflow-x:auto;padding:12px}
+.win{min-width:1180px;height:780px;border:1px solid var(--page-border);border-radius:8px;display:grid;
+  grid-template-rows:44px 1fr 28px;overflow:hidden}
+/* 顶栏 */
+.top{display:flex;align-items:center;gap:10px;padding:0 12px;border-bottom:1px solid var(--page-border);background:#24272B}
+.folder{display:flex;align-items:center;gap:6px;background:var(--page-card);border:1px solid var(--page-border);border-radius:6px;padding:5px 10px}
+.folder b{color:var(--page-gold);font-weight:600}
+.crumb{color:var(--page-muted);font-size:13px}
+.chip{font-size:13px;padding:3px 10px;border:1px solid var(--page-border);border-radius:12px;color:var(--page-muted);background:transparent}
+.chip.on{border-color:var(--page-gold);color:var(--page-gold)}
+.sp{flex:1}
+.sel{background:var(--page-card);border:1px solid var(--page-border);border-radius:6px;padding:5px 10px;font-size:14px}
+.ibtn{width:32px;height:30px;display:grid;place-items:center;border:1px solid var(--page-border);border-radius:6px;color:var(--page-muted)}
+/* 主体三栏 */
+.body{display:grid;grid-template-columns:240px 1fr 286px;min-height:0}
+.col{min-height:0;border-right:1px solid var(--page-border)}
+.col:last-child{border-right:none}
+/* 左栏 */
+.left{display:flex;flex-direction:column;padding:10px;gap:8px}
+.search{background:var(--page-card);border:1px solid var(--page-border);border-radius:6px;padding:7px 10px;color:var(--page-muted)}
+.row{display:flex;gap:6px;flex-wrap:wrap}
+.seg{display:inline-flex;border:1px solid var(--page-border);border-radius:6px;overflow:hidden}
+.seg span{padding:4px 10px;font-size:13px;color:var(--page-muted);border-right:1px solid var(--page-border)}
+.seg span:last-child{border-right:none}
+.seg span.on{background:var(--page-gold);color:var(--page-bg);font-weight:600}
+.list{flex:1;overflow:hidden;border-top:1px solid var(--page-border);padding-top:6px}
+.it{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:4px}
+.it .dot{width:7px;height:7px;border-radius:50%;background:#4E8F5A;flex:none}
+.it .n{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.it .f{font-family:var(--page-mono);font-size:12px;color:var(--page-muted)}
+.it.cur{background:rgba(212,175,55,.16);color:var(--page-gold)}
+.cnt{font-size:13px;color:var(--page-muted)}
+/* 中栏：舞台 + 时间轴 */
+.mid{display:grid;grid-template-rows:42px 1fr 136px;min-width:0}
+.sh{display:flex;align-items:center;gap:12px;padding:0 12px;border-bottom:1px solid var(--page-border)}
+.sh .title{font-size:16px;font-weight:600}
+.sh .meta{color:var(--page-muted);font-size:13px}
+.ok{color:#6FBF7A}
+.stage{position:relative;display:grid;place-items:center;
+  background:radial-gradient(circle at 50% 55%,#24272B 0,var(--page-bg) 70%)}
+.ground{position:absolute;left:12%;right:12%;top:64%;border-top:1px dashed rgba(150,161,173,.25)}
+.cross{position:absolute;left:50%;top:64%;width:14px;height:14px;margin:-7px 0 0 -7px;
+  border-left:1px solid rgba(150,161,173,.35);border-top:1px solid rgba(150,161,173,.35);transform:rotate(45deg)}
+.zoom{position:absolute;left:12px;bottom:10px}
+.hint{position:absolute;right:12px;bottom:12px;font-size:12px;color:var(--page-muted)}
+.tl{border-top:1px solid var(--page-border);display:grid;grid-template-rows:40px 1fr;background:#222529}
+.ctrl{display:flex;align-items:center;gap:8px;padding:0 12px}
+.btn{border:1px solid var(--page-border);border-radius:6px;padding:4px 10px;font-size:13px;background:var(--page-card)}
+.btn.pri{border-color:var(--page-gold);color:var(--page-gold)}
+.slider{width:140px;height:4px;background:var(--page-border);border-radius:2px;position:relative}
+.slider i{position:absolute;left:18%;top:-5px;width:14px;height:14px;border-radius:50%;background:var(--page-gold)}
+.fnum{font-family:var(--page-mono);color:var(--page-gold)}
+.strip{display:flex;gap:6px;padding:4px 12px 10px;align-items:stretch}
+.fr{width:78px;border:1px solid var(--page-border);border-radius:5px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;background:var(--page-bg)}
+.fr svg{width:44px;height:36px}
+.fr small{font-family:var(--page-mono);font-size:12px;color:var(--page-muted)}
+.fr.cur{border:2px solid var(--page-gold)}
+.fr.cur small{color:var(--page-gold)}
+/* 右栏：检查器 */
+.right{padding:10px 12px;display:flex;flex-direction:column;gap:14px;overflow:hidden}
+.sec h4{margin:0 0 8px;font-size:13px;font-weight:600;color:var(--page-muted);display:flex;justify-content:space-between}
+.mx{display:grid;grid-template-columns:72px repeat(5,1fr);gap:3px;font-size:13px}
+.mx .h{color:var(--page-muted);text-align:center;font-size:12px;padding:2px 0}
+.mx .a{color:var(--page-muted);font-size:13px;display:flex;align-items:center}
+.c{height:26px;border-radius:4px;display:grid;place-items:center;font-family:var(--page-mono);font-size:13px;
+  background:var(--page-card);border:1px solid var(--page-border)}
+.c.na{background:transparent;border:1px dashed rgba(58,63,70,.8);color:#5A6068}
+.c.miss{background:rgba(199,68,68,.22);border-color:var(--page-red);color:#F0A0A0}
+.c.cur{border:2px solid var(--page-gold);color:var(--page-gold);font-weight:600}
+.c.colcur{background:rgba(212,175,55,.07)}
+.lg{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:12px;color:var(--page-muted)}
+.lg i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+.tg{display:flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid var(--page-border);border-radius:5px;margin-bottom:4px}
+.box{width:14px;height:14px;border-radius:3px;background:var(--page-gold)}
+.muted{color:var(--page-muted);font-size:13px}
+.res{font-size:13px;line-height:1.7}
+.res .ok::before{content:"";}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:13px}
+.kv span:nth-child(odd){color:var(--page-muted)}
+.kv span:nth-child(even){font-family:var(--page-mono);text-align:right}
+/* 状态栏 */
+.st{display:flex;align-items:center;gap:16px;padding:0 12px;border-top:1px solid var(--page-border);font-size:13px;color:var(--page-muted);background:#24272B}
+.st b{color:var(--page-text);font-weight:500}
+.tag{position:absolute;background:var(--page-gold);color:var(--page-bg);font-size:12px;font-weight:700;border-radius:10px;padding:1px 7px}
+</style></head>
+<body>
+<div class="wrap">
+<div class="win">
+
+  <!-- 顶栏：只放「在哪个目录 / 用哪套规则」，低频配置收进 ⚙ -->
+  <div class="top">
+    <div class="folder"><i data-lucide="folder-open" style="width:16px;height:16px;color:var(--page-gold)"></i><b>角色输出图_版署</b><span class="crumb">▾</span></div>
+    <span class="crumb">E:\XYJProject\美术资源\动画序列帧\</span>
+    <span class="chip">角色输出图</span><span class="chip">261126</span><span class="chip">503122</span><span class="chip">261125</span>
+    <div class="sp"></div>
+    <span class="muted">规则模板</span><span class="sel">天命装 ▾</span>
+    <span class="ibtn" title="设置：模板编辑/新建、匹配表、自动刷新、fills 检查"><i data-lucide="settings" style="width:16px;height:16px"></i></span>
+  </div>
+
+  <div class="body">
+    <!-- 左栏：资源列表 = 选「看谁」 -->
+    <div class="col left">
+      <div class="search">过滤 ID / 中文名…</div>
+      <div class="row"><div class="seg"><span class="on">全部</span><span>伙伴</span><span>怪物</span><span>BOSS</span></div></div>
+      <div class="row"><div class="seg"><span class="on">全部 13</span><span>有问题 0</span></div></div>
+      <div class="list">
+        <div class="it"><span class="dot"></span><span class="n">502007 · 杨硕</span><span class="f">—</span></div>
+        <div class="it"><span class="dot"></span><span class="n">502013 · 程咬金</span><span class="f">—</span></div>
+        <div class="it"><span class="dot"></span><span class="n">503053 · 竹妖</span><span class="f">—</span></div>
+        <div class="it"><span class="dot"></span><span class="n">503088 · 猫鬼尸</span><span class="f">—</span></div>
+        <div class="it"><span class="dot"></span><span class="n">503091 · 青疟鬼</span><span class="f">—</span></div>
+        <div class="it"><span class="dot"></span><span class="n">5030911 · 青疟鬼(金)</span><span class="f">—</span></div>
+        <div class="it"><span class="dot"></span><span class="n">5030912 · 青疟鬼(木)</span><span class="f">—</span></div>
+        <div class="it"><span class="dot"></span><span class="n">5030913 · 青疟鬼(水)</span><span class="f">—</span></div>
+        <div class="it"><span class="dot"></span><span class="n">5030914 · 青疟鬼(火)</span><span class="f">—</span></div>
+        <div class="it cur"><span class="dot"></span><span class="n">503122 · 宝箱怪</span><span class="f">118</span></div>
+        <div class="it"><span class="dot"></span><span class="n">504001 · 鲛精</span><span class="f">—</span></div>
+        <div class="it"><span class="dot"></span><span class="n">504002 · 杨硕(魔化版)</span><span class="f">—</span></div>
+        <div class="it"><span class="dot"></span><span class="n">504014 · 宇文拓(魔化版)</span><span class="f">—</span></div>
+      </div>
+      <div class="cnt">单部件资源不显示展开箭头</div>
+    </div>
+
+    <!-- 中栏：舞台（主角）+ 时间轴（A 区改成胶片条，兼当进度条） -->
+    <div class="col mid">
+      <div class="sh">
+        <span class="title">503122 · 宝箱怪</span>
+        <span class="meta">SE · idle · 8 帧 0001–0008 · <span class="ok">帧号连续</span></span>
+        <div class="sp"></div>
+        <div class="seg"><span class="on">画布对齐</span><span>内容裁剪</span></div>
+        <div class="seg"><span class="on">透明</span><span>棋盘格</span></div>
+      </div>
+      <div class="stage">
+        <div class="ground"></div><div class="cross"></div>
+        <svg width="150" height="130" viewBox="0 0 150 130" aria-label="宝箱怪当前帧">
+          <rect x="22" y="58" width="106" height="58" rx="6" fill="#8E2E26" stroke="#2F6F5E" stroke-width="5"></rect>
+          <path d="M22 60 Q75 6 128 60 Z" fill="#A83A2F" stroke="#2F6F5E" stroke-width="5"></path>
+          <rect x="66" y="66" width="18" height="22" rx="3" fill="#D4AF37"></rect>
+          <circle cx="40" cy="104" r="7" fill="#3E8E74"></circle><circle cx="52" cy="110" r="6" fill="#3E8E74"></circle>
+        </svg>
+        <div class="zoom seg"><span class="on">适应</span><span>1×</span><span>2×</span><span>4×</span></div>
+        <div class="hint">画布内点击 / 拖拽 = 切方向 · Ctrl+滚轮缩放 · 空格播放</div>
+      </div>
+      <div class="tl">
+        <div class="ctrl">
+          <span class="btn pri">⏸ 暂停中</span><span class="btn">◀</span><span class="btn">▶</span>
+          <span class="muted">帧</span><span class="fnum">3 / 8</span>
+          <span class="muted" style="margin-left:10px">FPS</span><div class="slider"><i></i></div><span class="fnum">12</span>
+          <span class="btn pri">循环</span>
+          <div class="sp"></div>
+          <div class="seg"><span class="on">胶片条</span><span>整页网格</span></div>
+        </div>
+        <div class="strip" id="strip"></div>
+      </div>
+    </div>
+
+    <!-- 右栏：检查器 = 「看什么 / 查出了什么」 -->
+    <div class="col right">
+      <div class="sec">
+        <h4><span>方向 × 动作</span><span>合计 118 帧</span></h4>
+        <div class="mx" id="mx"></div>
+        <div class="lg">
+          <span><i style="background:var(--page-card);border:1px solid var(--page-border)"></i>有资源（帧数）</span>
+          <span><i style="background:rgba(199,68,68,.4)"></i>缺 / 空帧</span>
+          <span><i style="border:1px dashed #5A6068"></i>不适用</span>
+          <span><i style="border:2px solid var(--page-gold)"></i>当前</span>
+        </div>
+      </div>
+      <div class="sec">
+        <h4><span>显示层</span><span>1 层</span></h4>
+        <div class="tg"><span class="box"></span>整体</div>
+        <div class="muted">单部件资源，无叠层与穿戴项</div>
+      </div>
+      <div class="sec">
+        <h4><span>检查结果</span></h4>
+        <div class="res">
+          <div class="ok">✓ 无缺方向 / 缺动作</div>
+          <div class="ok">✓ 各动作帧号连续</div>
+          <div class="ok">✓ 无空帧 · 无多余动作</div>
+          <div class="muted">问题出现时逐条列在这里，点一条直接跳到对应格子</div>
+        </div>
+      </div>
+      <div class="sec">
+        <h4><span>资源信息</span></h4>
+        <div class="kv"><span>部件</span><span>1</span><span>原画布</span><span>— × —</span><span>内容 bbox</span><span>— × —</span><span>路径</span><span>…\503122</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 状态栏：只留全局与一次性提示 -->
+  <div class="st"><span><b>13</b> 组资源</span><span><b>0</b> 组有问题</span><span>自动刷新 开</span><div class="sp"></div><span>已复制第 0003 帧（去透明边缘）</span></div>
+</div>
+</div>
+
+<script>
+// 胶片条：8 帧，第 3 帧为当前帧
+const strip=document.getElementById('strip');
+const chest='<svg viewBox="0 0 150 130"><rect x="22" y="58" width="106" height="58" rx="6" fill="#8E2E26" stroke="#2F6F5E" stroke-width="6"/><path d="M22 60 Q75 6 128 60 Z" fill="#A83A2F" stroke="#2F6F5E" stroke-width="6"/></svg>';
+for(let i=1;i<=8;i++){
+  const d=document.createElement('div');d.className='fr'+(i===3?' cur':'');
+  d.innerHTML=chest+'<small>'+String(i).padStart(4,'0')+'</small>';strip.appendChild(d);
+}
+// 方向×动作矩阵：按截图数据（SE/NW 7 个动作，E/N/S 只有 idle/run，合计 118 帧）
+const dirs=['E','N','NW','S','SE'];
+const acts=['idle','run','attack','skill','hurt','block','dead','ride_idle','ride_run'];
+const full={idle:8,run:8,attack:8,skill:8,hurt:1,block:1,dead:1};
+const lite={idle:8,run:8};
+const data={E:lite,N:lite,NW:full,S:lite,SE:full};
+const mx=document.getElementById('mx');
+mx.insertAdjacentHTML('beforeend','<div></div>');
+dirs.forEach(d=>mx.insertAdjacentHTML('beforeend','<div class="h" style="'+(d==='SE'?'color:var(--page-gold)':'')+'">'+d+'</div>'));
+acts.forEach(a=>{
+  mx.insertAdjacentHTML('beforeend','<div class="a" style="'+(a==='idle'?'color:var(--page-gold)':'')+'">'+a+'</div>');
+  dirs.forEach(d=>{
+    const v=data[d][a];
+    let cls='c'+(d==='SE'?' colcur':'');
+    if(v===undefined) cls+=' na';
+    if(d==='SE'&&a==='idle') cls+=' cur';
+    mx.insertAdjacentHTML('beforeend','<div class="'+cls+'">'+(v===undefined?'·':v)+'</div>');
+  });
+});
+</script>
+<script src="https://cdn.jsdelivr.net/npm/lucide@0.563.0/dist/umd/lucide.min.js"></script>
+<script>try{lucide.createIcons()}catch(e){}</script>
+
+</body></html>

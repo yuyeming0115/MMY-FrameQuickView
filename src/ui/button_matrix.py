@@ -79,14 +79,14 @@ QPushButton[extra="true"] {
     background: rgba(232,163,61,0.16); border: 1px solid #E8A33D; color: #F2C97D;
 }
 """
-LABEL_STYLE = "color: #96A1AD; font-size: 12px; padding: 2px 0 1px 2px; letter-spacing: 1px;"
+LABEL_STYLE = "color: #96A1AD; font-size: 13px; padding: 2px 0 1px 2px; letter-spacing: 1px;"
 
 # M32.3 角标分色（用户反馈迭代：金→紫）：蓝色 = 方向按钮·动作数；
 # 紫色 = 动作按钮·帧数；红色 = 断档/帧数不一致（优先级最高）；M43 琥珀 = 多余动作
-BADGE_PURPLE = "QLabel { background: #9C6ADE; color: #FFFFFF; font-size: 11px; font-weight: 500; border-radius: 8px; padding: 0 5px; }"
-BADGE_BLUE = "QLabel { background: #4C8FD6; color: #FFFFFF; font-size: 11px; font-weight: 500; border-radius: 8px; padding: 0 5px; }"
-BADGE_RED = "QLabel { background: #C74444; color: #FFFFFF; font-size: 11px; font-weight: 500; border-radius: 8px; padding: 0 5px; }"
-BADGE_AMBER = "QLabel { background: #D98A2B; color: #1E2023; font-size: 11px; font-weight: 600; border-radius: 8px; padding: 0 5px; }"
+BADGE_PURPLE = "QLabel { background: #9C6ADE; color: #FFFFFF; font-size: 12px; font-weight: 500; border-radius: 8px; padding: 0 5px; }"
+BADGE_BLUE = "QLabel { background: #4C8FD6; color: #FFFFFF; font-size: 12px; font-weight: 500; border-radius: 8px; padding: 0 5px; }"
+BADGE_RED = "QLabel { background: #C74444; color: #FFFFFF; font-size: 12px; font-weight: 500; border-radius: 8px; padding: 0 5px; }"
+BADGE_AMBER = "QLabel { background: #D98A2B; color: #1E2023; font-size: 12px; font-weight: 600; border-radius: 8px; padding: 0 5px; }"
 
 
 class BadgeButton(QPushButton):
@@ -172,7 +172,7 @@ class ButtonStack(QFrame):
             self.header_btn.setFixedHeight(20)
             self.header_btn.setStyleSheet(
                 "QPushButton { background: #2A2E33; border: 1px solid #3A3F46; border-radius: 4px;"
-                " color: #96A1AD; padding: 1px 8px; font-size: 11px; }"
+                " color: #96A1AD; padding: 1px 8px; font-size: 12px; }"
                 "QPushButton:checked { background: rgba(212,175,55,0.18); border-color: #D4AF37; color: #D4AF37; }"
                 "QPushButton:hover { border-color: #D4AF37; color: #D4AF37; }"
             )

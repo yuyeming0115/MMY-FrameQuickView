@@ -132,7 +132,7 @@ class PartList(QFrame):
         layout.addWidget(self.tree, 1)
 
         self.count_label = QLabel("未加载")
-        self.count_label.setStyleSheet("color: #96A1AD; font-size: 12px; padding: 2px 4px;")
+        self.count_label.setStyleSheet("color: #96A1AD; font-size: 13px; padding: 2px 4px;")
         layout.addWidget(self.count_label)
 
         # 左栏宽度允许 splitter 拖动：220~480 区间。

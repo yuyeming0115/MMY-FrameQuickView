@@ -146,7 +146,7 @@ class HUDPanel(QScrollArea):
     def _render(self, stats: HudStats) -> str:
         header = (
             f"<div style='color:{_COLOR_GOLD}; font-size:15px;'>{stats.title}</div>"
-            f"<div style='color:{_COLOR_LABEL}; font-size:12px; margin:0 0 4px 0;'>{stats.subtitle}</div>"
+            f"<div style='color:{_COLOR_LABEL}; font-size:13px; margin:0 0 4px 0;'>{stats.subtitle}</div>"
         )
         if not self._expanded:
             return header + self._render_compact(stats)

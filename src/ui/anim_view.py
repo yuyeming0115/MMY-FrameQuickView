@@ -358,22 +358,24 @@ class PartToggles(QFrame):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 6, 8, 6)
         outer.setSpacing(4)
+        self._outer = outer           # M44.1b：content_height() 按它的边距/间距实测面板高度
 
         title = QLabel("显示层")
-        title.setStyleSheet("color: #96A1AD; font-size: 11px; letter-spacing: 1px;")
+        # M44.1：字号 11 → 13（可读性规范：不再出现 11px）
+        title.setStyleSheet("color: #96A1AD; font-size: 13px; letter-spacing: 1px;")
         outer.addWidget(title)
 
         # M26/M28：穿戴行——全局可穿戴资源库（特效 / 翅膀），任意套装可挑一个穿上。
         # 选完特效可直接 Ctrl+方向键微调偏移，与显示层操作集中在一处。
         def add_wear_row(caption: str, handler) -> tuple[QLabel, QComboBox]:
             label = QLabel(caption)
-            label.setStyleSheet("color: #96A1AD; font-size: 11px; letter-spacing: 1px;")
+            label.setStyleSheet("color: #96A1AD; font-size: 13px; letter-spacing: 1px;")
             outer.addWidget(label)
             combo = QComboBox()
             combo.setFixedHeight(24)
             combo.setStyleSheet(
                 "QComboBox { background: #2A2E33; border: 1px solid #3A3F46; border-radius: 4px;"
-                " color: #E8E4D9; padding: 2px 6px; font-size: 12px; }"
+                " color: #E8E4D9; padding: 2px 6px; font-size: 13px; }"
                 "QComboBox:hover { border-color: #D4AF37; }"
                 "QComboBox QAbstractItemView { background: #2A2E33; color: #E8E4D9;"
                 " selection-background-color: #D4AF37; selection-color: #1E2023; }"
@@ -474,6 +476,36 @@ class PartToggles(QFrame):
         key = self._wing_combo.itemData(index)
         self.wing_dressed.emit(key if key else "")
 
+    def content_height(self) -> int:
+        """M44.1b：面板完整显示所需的高度（像素），按实际控件逐项累加。
+
+        为什么不再手写公式：旧公式把每个文字行写死成 18px，并且每个穿戴项
+        只算了一个 4px 间距——实际上「标签」和「下拉框」是两行，各自和下一行之间
+        都有间距。字号调大后误差累积（5 个穿戴项少算 20px），最后一个部件按钮
+        被截掉一半（实测截图）。现在直接读控件的建议高度 + 布局的真实间距，
+        以后改字号、加穿戴项都不用再改这里。
+        """
+        lay = self._outer
+        m = lay.contentsMargins()
+        h = m.top() + m.bottom()
+        rows = 0                                    # 参与排列的可见行数（用于算间距个数）
+        for i in range(lay.count()):
+            w = lay.itemAt(i).widget()
+            if w is None or w is self._scroll or not w.isVisibleTo(self):
+                continue                            # 隐藏的穿戴行不占位置
+            # 建议高度要夹在控件自己的最小/最大高度之间（下拉框 setFixedHeight(24)）
+            hint = w.sizeHint().height()
+            h += max(w.minimumHeight(), min(hint, w.maximumHeight()))
+            rows += 1
+        # 部件按钮列表（在滚动区里）：每个按钮固定 24px，按钮之间间距同 self._list
+        n = len(self._items)
+        if n:
+            h += n * 24 + (n - 1) * self._list.spacing()
+            rows += 1                               # 滚动区本身也是一行
+        if rows > 1:
+            h += (rows - 1) * lay.spacing()         # 行与行之间的间距
+        return h + 2                                # 留 2px 余量，避免边框贴边被裁
+
     @property
     def wear_selector_count(self) -> int:
         """M28：可见的穿戴下拉框数量（供 _reposition_toggles 计算面板高度）。"""
@@ -508,7 +540,7 @@ class PartToggles(QFrame):
             btn.setFixedHeight(24)
             btn.setStyleSheet(
                 "QPushButton { background: #2A2E33; border: 1px solid #3A3F46; border-radius: 4px;"
-                " color: #96A1AD; padding: 2px 8px; font-size: 12px; text-align: left; }"
+                " color: #96A1AD; padding: 2px 8px; font-size: 13px; text-align: left; }"
                 "QPushButton:checked { color: #D4AF37; border-color: #D4AF37; }"
                 "QPushButton:hover { border-color: #D4AF37; }"
             )
@@ -540,7 +572,8 @@ class AnimView(QFrame):
 
         # ---- 上半：标题行 + 叠加层（canvas 铺底，按钮矩阵浮于其上）----
         self._title = QLabel("B · GIF 动画预览（并集 bbox · 防抖动）")
-        self._title.setStyleSheet("color: #96A1AD; font-size: 12px; letter-spacing: 1px;")
+        # M44.1：区标题字号 12 → 14（正文 ≥14px 规范）
+        self._title.setStyleSheet("color: #96A1AD; font-size: 14px; letter-spacing: 1px;")
         outer.addWidget(self._title)
 
         # M35：按钮矩阵独立列（不再悬浮遮挡画布）——左 = 矩阵列 | 右 = 画布区
@@ -608,13 +641,22 @@ class AnimView(QFrame):
         self._play_btn = QPushButton("▶ 播放")
         self._play_btn.setCheckable(True)
         self._play_btn.clicked.connect(self._toggle_play)
+        self._play_btn.setToolTip("播放 / 暂停（快捷键：空格）")
         bar.addWidget(self._play_btn)
 
-        self._prev_btn = QPushButton("◀ 上一帧")
+        # M44.1：「◀ 上一帧」「下一帧 ▶」缩成图标按钮，完整说明放进悬停提示。
+        # 原因：1280 宽窗口下底栏放不下全部控件，按钮文字被截断（实测截图）；
+        # 现在有了 , . 快捷键，按钮本身不需要写全称。省出约 100px 给 FPS 滑杆。
+        # 用 |◀ ▶| 而不是 ◀ ▶：和「▶ 播放」区分开，一看就是「走一帧」。
+        self._prev_btn = QPushButton("|◀")
+        self._prev_btn.setToolTip("上一帧（快捷键：逗号 ,）")
+        self._prev_btn.setFixedWidth(44)
         self._prev_btn.clicked.connect(self._prev_frame)
         bar.addWidget(self._prev_btn)
 
-        self._next_btn = QPushButton("下一帧 ▶")
+        self._next_btn = QPushButton("▶|")
+        self._next_btn.setToolTip("下一帧（快捷键：句号 .）")
+        self._next_btn.setFixedWidth(44)
         self._next_btn.clicked.connect(self._next_frame)
         bar.addWidget(self._next_btn)
 
@@ -622,7 +664,10 @@ class AnimView(QFrame):
         self._fps_slider = QSlider(Qt.Horizontal)
         self._fps_slider.setRange(FPS_MIN, FPS_MAX)
         self._fps_slider.setValue(12)
-        self._fps_slider.setMaximumWidth(120)
+        # M44.1：只设最大宽度时，底栏按钮一多滑杆会被挤成一个点（1280 宽窗口实测）。
+        # 加最小宽度，保证任何窗口宽度下都能拖动。
+        self._fps_slider.setMinimumWidth(100)     # 100 足够拖动；再大会挤掉右边按钮
+        self._fps_slider.setMaximumWidth(160)
         self._fps_slider.valueChanged.connect(self._on_fps_changed)
         bar.addWidget(self._fps_slider)
         self._fps_label = QLabel("12")
@@ -875,11 +920,11 @@ class AnimView(QFrame):
             # 尺寸手动按内容计算：QScrollArea 的 sizeHint 在按钮刚加入时
             # 不会自动失效（拿到的是过期小尺寸），不能依赖 adjustSize。
             w = max(b.sizeHint().width() for b in btns) + 16 + 10  # 边距 + 滚动条余量
-            h = 6 + 18 + 4 + n * 24 + (n - 1) * 4 + 6             # 标题 + 按钮行
-            # M26/M28：穿戴下拉框（每组：标签 18 + spacing 4 + 下拉框 24）
-            n_wear = tog.wear_selector_count
-            if n_wear:
-                h += n_wear * (18 + 4 + 24)
+            # M44.1b：高度改为按实际控件逐项累加（见 PartToggles.content_height 的说明），
+            # 修复字号调大后最下面的「☑ 整体」被截掉一半
+            h = tog.content_height()
+            # M26/M28：有穿戴下拉框时，面板宽度至少要放得下下拉框
+            if tog.wear_selector_count:
                 w = max(w, tog.wear_selector_hint_width() + 16 + 10)
             tog.setFixedSize(w, h)
         # 高度上限：超出宿主则收窄到宿主高度，内部滚动接管
@@ -989,6 +1034,40 @@ class AnimView(QFrame):
         """跳转到指定帧并暂停，方便对照 A 区细节。"""
         self._pause()
         self._set_index(idx)
+
+    # ---------------- M44.1：快捷键用的公共方法 ----------------
+    # 主窗口注册的快捷键（空格 / , / . / Home / End）只调用这里的方法，
+    # 不直接碰内部的按钮和定时器，以后改播放逻辑时快捷键不用跟着改。
+    def toggle_play(self) -> None:
+        """空格：播放 ↔ 暂停。
+
+        直接模拟点一下「播放」按钮：按钮的勾选状态、文字、定时器
+        都走原来的 _toggle_play 逻辑，保证和鼠标点击效果完全一样。
+        """
+        if not self._frames:          # 还没有帧（未选中资源 / 解码中）→ 什么都不做
+            return
+        self._play_btn.click()
+
+    def step_frame(self, delta: int) -> None:
+        """逗号 / 句号：上一帧（delta=-1）/ 下一帧（delta=+1），自动暂停。"""
+        if delta < 0:
+            self._prev_frame()        # 原有方法：会先暂停，再循环回绕到上一帧
+        else:
+            self._next_frame()
+
+    def goto_edge(self, last: bool) -> None:
+        """Home / End：跳到第一帧 / 最后一帧，并暂停。"""
+        if not self._frames:
+            return
+        self._pause()
+        self._set_index(len(self._frames) - 1 if last else 0)
+
+    def current_index(self) -> int:
+        """当前显示的是第几帧（从 0 开始），测试和状态显示用。"""
+        return self._index
+
+    def is_playing(self) -> bool:
+        return self._timer.isActive()
 
     def set_resume_state(self, paused: bool, idx: int) -> None:
         """下一次序列解码完成后的恢复方式（M24 自动刷新用，一次性）。

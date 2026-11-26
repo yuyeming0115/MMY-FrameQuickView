@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QFileSystemWatcher, QSettings, Qt, QTimer, QThread, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
     QMessageBox, QPushButton, QSplitter, QVBoxLayout, QWidget,
@@ -160,9 +161,12 @@ class MainWindow(QMainWindow):
         self.anim_view.set_layer_panel_visible(
             bool(self._settings.value("display/layer_panel", True, type=bool)))
         # 恢复 A区「原图/自适应」模式
-        saved_fit = self._settings.value("grid/fit_mode", False)
-        if saved_fit is not None and bool(saved_fit) != self.grid_view._mode_btn.isChecked():
-            self.grid_view._mode_btn.toggle()
+        # M44.1 修复：Windows 注册表把布尔值存成字符串 "true"/"false"，
+        # 旧写法 bool("false") 结果是 True → 只要保存过一次，重启后总是自适应。
+        # 加 type=bool 让 QSettings 自己正确转换。
+        saved_fit = bool(self._settings.value("grid/fit_mode", False, type=bool))
+        if saved_fit:
+            self.grid_view._mode_btn.setChecked(True)    # 两段式按钮互斥，原图会自动弹起
         # 重启恢复：自动重新扫描上次拖入的目录
         if self._last_folder is not None and self._tpl is not None:
             self._on_folder_dropped(self._last_folder)
@@ -301,6 +305,38 @@ class MainWindow(QMainWindow):
         # 全窗口拖拽：central widget 接收拖放，事件过滤器统一处理
         central.setAcceptDrops(True)
         central.installEventFilter(self)
+
+        self._setup_shortcuts()
+
+    def _setup_shortcuts(self) -> None:
+        """M44.1：播放控制快捷键。
+
+        | 按键 | 作用 |
+        | 空格 | 播放 / 暂停 |
+        | ,  . | 上一帧 / 下一帧（自动暂停） |
+        | Home / End | 第一帧 / 最后一帧 |
+
+        为什么用 QShortcut 而不是写在 keyPressEvent 里：
+        点过方向/动作按钮后焦点停在那个按钮上，空格会被按钮自己吃掉（等于再点一次按钮），
+        keyPressEvent 根本收不到。QShortcut 会先于按钮拿到按键。
+
+        在过滤框、F2 改名框、模板下拉里打字时不受影响：
+        这些输入控件会优先接管按键（Qt 的 ShortcutOverride 机制），快捷键不会触发。
+        已知取舍：焦点在左栏列表时，Home/End 不再跳到列表首尾，而是跳到首/尾帧。
+        """
+        bindings = [
+            ("Space", self.anim_view.toggle_play),
+            (",", lambda: self.anim_view.step_frame(-1)),
+            (".", lambda: self.anim_view.step_frame(+1)),
+            ("Home", lambda: self.anim_view.goto_edge(last=False)),
+            ("End", lambda: self.anim_view.goto_edge(last=True)),
+        ]
+        self._shortcuts: list[QShortcut] = []
+        for keys, handler in bindings:
+            sc = QShortcut(QKeySequence(keys), self)
+            sc.setContext(Qt.WindowShortcut)    # 整个主窗口内有效（弹出的对话框里不生效）
+            sc.activated.connect(handler)
+            self._shortcuts.append(sc)          # 保存引用，防止被 Python 回收后快捷键失效
 
     # ---------------- 行为 ----------------
     def _on_folder_dropped(self, folder: Path, auto: bool = False) -> None:
@@ -1442,8 +1478,18 @@ class MainWindow(QMainWindow):
             core_n = len(self._render_parts(self._group))
             if self._group.is_variant:
                 segs.append(f"变体 {gname}（{core_n} 层）")
+            elif core_n <= 1:
+                # M44.1：单部件资源（如 503122 宝箱怪）没有叠层，
+                # 不再显示「1 层叠合 · shadow 最底」这种无意义的信息
+                segs.append(f"组 {gname}（单部件）")
             else:
-                segs.append(f"组 {gname}（{core_n} 层叠合 · shadow 最底）")
+                # 只有组里真的有影子部件时才提示「shadow 最底」
+                has_shadow = any(p.part == "shadow" for p in self._render_parts(self._group))
+                segs.append(
+                    f"组 {gname}（{core_n} 层叠合"
+                    + (" · shadow 最底" if has_shadow else "")
+                    + "）"
+                )
             # M37：形象组合生效时提示叠加了多少跨 ID 部件
             extra = len(self._display_parts(self._group)) - core_n
             if extra > 0:

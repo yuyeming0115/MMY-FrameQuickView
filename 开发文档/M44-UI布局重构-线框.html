@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8">
+<title>MMY-FrameQuickView 改版线框</title>
+<style>
+:root{
+  --page-bg:#1E2023; --page-card:#2A2E33; --page-border:#3A3F46; --page-gold:#D4AF37;
+  --page-text:#E8E4D9; --page-muted:#96A1AD; --page-red:#C74444; --page-amber:#E8A33D;
+  --page-font:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;
+  --page-mono:Consolas,"Cascadia Mono",monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page-bg);font-family:var(--page-font);color:var(--page-text);font-size:14px}
+.wrap{overflow-x:auto;padding:12px}
+.win{min-width:1180px;height:780px;border:1px solid var(--page-border);border-radius:8px;display:grid;
+  grid-template-rows:44px 1fr 28px;overflow:hidden}
+/* 顶栏 */
+.top{display:flex;align-items:center;gap:10px;padding:0 12px;border-bottom:1px solid var(--page-border);background:#24272B}
+.folder{display:flex;align-items:center;gap:6px;background:var(--page-card);border:1px solid var(--page-border);border-radius:6px;padding:5px 10px}
+.folder b{color:var(--page-gold);font-weight:600}
+.crumb{color:var(--page-muted);font-size:13px}
+.chip{font-size:13px;padding:3px 10px;border:1px solid var(--page-border);border-radius:12px;color:var(--page-muted);background:transparent}
+.chip.on{border-color:var(--page-gold);color:var(--page-gold)}
+.sp{flex:1}
+.sel{background:var(--page-card);border:1px solid var(--page-border);border-radius:6px;padding:5px 10px;font-size:14px}
+.ibtn{width:32px;height:30px;display:grid;place-items:center;border:1px solid var(--page-border);border-radius:6px;color:var(--page-muted)}
+/* 主体三栏 */
+.body{display:grid;grid-template-columns:240px 1fr 286px;min-height:0}
+.col{min-height:0;border-right:1px solid var(--page-border)}
+.col:last-child{border-right:none}
+/* 左栏 */
+.left{display:flex;flex-direction:column;padding:10px;gap:8px}
+.search{background:var(--page-card);border:1px solid var(--page-border);border-radius:6px;padding:7px 10px;color:var(--page-muted)}
+.row{display:flex;gap:6px;flex-wrap:wrap}
+.seg{display:inline-flex;border:1px solid var(--page-border);border-radius:6px;overflow:hidden}
+.seg span{padding:4px 10px;font-size:13px;color:var(--page-muted);border-right:1px solid var(--page-border)}
+.seg span:last-child{border-right:none}
+.seg span.on{background:var(--page-gold);color:var(--page-bg);font-weight:600}
+.list{flex:1;overflow:hidden;border-top:1px solid var(--page-border);padding-top:6px}
+.it{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:4px}
+.it .dot{width:7px;height:7px;border-radius:50%;background:#4E8F5A;flex:none}
+.it .n{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.it .f{font-family:var(--page-mono);font-size:12px;color:var(--page-muted)}
+.it.cur{background:rgba(212,175,55,.16);color:var(--page-gold)}
+.cnt{font-size:13px;color:var(--page-muted)}
+/* 中栏：舞台 + 时间轴 */
+.mid{display:grid;grid-template-rows:42px 1fr 136px;min-width:0}
+.sh{display:flex;align-items:center;gap:12px;padding:0 12px;border-bottom:1px solid var(--page-border)}
+.sh .title{font-size:16px;font-weight:600}
+.sh .meta{color:var(--page-muted);font-size:13px}
+.ok{color:#6FBF7A}
+.stage{position:relative;display:grid;place-items:center;
+  background:radial-gradient(circle at 50% 55%,#24272B 0,var(--page-bg) 70%)}
+.ground{position:absolute;left:12%;right:12%;top:64%;border-top:1px dashed rgba(150,161,173,.25)}
+.cross{position:absolute;left:50%;top:64%;width:14px;height:14px;margin:-7px 0 0 -7px;
+  border-left:1px solid rgba(150,161,173,.35);border-top:1px solid rgba(150,161,173,.35);transform:rotate(45deg)}
+.zoom{position:absolute;left:12px;bottom:10px}
+.hint{position:absolute;right:12px;bottom:12px;font-size:12px;color:var(--page-muted)}
+.tl{border-top:1px solid var(--page-border);display:grid;grid-template-rows:40px 1fr;background:#222529}
+.ctrl{display:flex;align-items:center;gap:8px;padding:0 12px}
+.btn{border:1px solid var(--page-border);border-radius:6px;padding:4px 10px;font-size:13px;background:var(--page-card)}
+.btn.pri{border-color:var(--page-gold);color:var(--page-gold)}
+.slider{width:140px;height:4px;background:var(--page-border);border-radius:2px;position:relative}
+.slider i{position:absolute;left:18%;top:-5px;width:14px;height:14px;border-radius:50%;background:var(--page-gold)}
+.fnum{font-family:var(--page-mono);color:var(--page-gold)}
+.strip{display:flex;gap:6px;padding:4px 12px 10px;align-items:stretch}
+.fr{width:78px;border:1px solid var(--page-border);border-radius:5px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;background:var(--page-bg)}
+.fr svg{width:44px;height:36px}
+.fr small{font-family:var(--page-mono);font-size:12px;color:var(--page-muted)}
+.fr.cur{border:2px solid var(--page-gold)}
+.fr.cur small{color:var(--page-gold)}
+/* 右栏：检查器 */
+.right{padding:10px 12px;display:flex;flex-direction:column;gap:14px;overflow:hidden}
+.sec h4{margin:0 0 8px;font-size:13px;font-weight:600;color:var(--page-muted);display:flex;justify-content:space-between}
+.mx{display:grid;grid-template-columns:72px repeat(5,1fr);gap:3px;font-size:13px}
+.mx .h{color:var(--page-muted);text-align:center;font-size:12px;padding:2px 0}
+.mx .a{color:var(--page-muted);font-size:13px;display:flex;align-items:center}
+.c{height:26px;border-radius:4px;display:grid;place-items:center;font-family:var(--page-mono);font-size:13px;
+  background:var(--page-card);border:1px solid var(--page-border)}
+.c.na{background:transparent;border:1px dashed rgba(58,63,70,.8);color:#5A6068}
+.c.miss{background:rgba(199,68,68,.22);border-color:var(--page-red);color:#F0A0A0}
+.c.cur{border:2px solid var(--page-gold);color:var(--page-gold);font-weight:600}
+.c.colcur{background:rgba(212,175,55,.07)}
+.lg{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:12px;color:var(--page-muted)}
+.lg i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+.tg{display:flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid var(--page-border);border-radius:5px;margin-bottom:4px}
+.box{width:14px;height:14px;border-radius:3px;background:var(--page-gold)}
+.muted{color:var(--page-muted);font-size:13px}
+.res{font-size:13px;line-height:1.7}
+.res .ok::before{content:"";}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:13px}
+.kv span:nth-child(odd){color:var(--page-muted)}
+.kv span:nth-child(even){font-family:var(--page-mono);text-align:right}
+/* 状态栏 */
+.st{display:flex;align-items:center;gap:16px;padding:0 12px;border-top:1px solid var(--page-border);font-size:13px;color:var(--page-muted);background:#24272B}
+.st b{color:var(--page-text);font-weight:500}
+.tag{position:absolute;background:var(--page-gold);color:var(--page-bg);font-size:12px;font-weight:700;border-radius:10px;padding:1px 7px}
+</style></head>
+<body>
+<div class="wrap">
+<div class="win">
+
+  <!-- 顶栏：只放「在哪个目录 / 用哪套规则」，低频配置收进 ⚙ -->
+  <div class="top">
+    <div class="folder"><span style="color:var(--page-gold)">📁</span><b>角色输出图_版署</b><span class="crumb">▾</span></div>
+    <span class="crumb">E:\XYJProject\美术资源\动画序列帧\</span>
+    <span class="chip">角色输出图</span><span class="chip">261126</span><span class="chip">503122</span><span class="chip">261125</span>
+    <div class="sp"></div>
+    <span class="muted">规则模板</span><span class="sel">天命装 ▾</span>
+    <span class="ibtn" title="设置：模板编辑/新建、匹配表、自动刷新、fills 检查">⚙</span>
+  </div>
+
+  <div class="body">
+    <!-- 左栏：资源列表 = 选「看谁」 -->
+    <div class="col left">
+      <div class="search">过滤 ID / 中文名…</div>
+      <div class="row"><div class="seg"><span class="on">全部</span><span>伙伴</span><span>怪物</span><span>BOSS</span></div></div>
+      <div class="row"><div class="seg"><span class="on">全部 13</span><span>有问题 0</span></div></div>
+      <div class="list">
+        <div class="it"><span class="dot"></span><span class="n">502007 · 杨硕</span><span class="f">—</span></div>
+        <div class="it"><span class="dot"></span><span class="n">502013 · 程咬金</span><span class="f">—</span></div>
+        <div class="it"><span class="dot"></span><span class="n">503053 · 竹妖</span><span class="f">—</span></div>
+        <div class="it"><span class="dot"></span><span class="n">503088 · 猫鬼尸</span><span class="f">—</span></div>
+        <div class="it"><span class="dot"></span><span class="n">503091 · 青疟鬼</span><span class="f">—</span></div>
+        <div class="it"><span class="dot"></span><span class="n">5030911 · 青疟鬼(金)</span><span class="f">—</span></div>
+        <div class="it"><span class="dot"></span><span class="n">5030912 · 青疟鬼(木)</span><span class="f">—</span></div>
+        <div class="it"><span class="dot"></span><span class="n">5030913 · 青疟鬼(水)</span><span class="f">—</span></div>
+        <div class="it"><span class="dot"></span><span class="n">5030914 · 青疟鬼(火)</span><span class="f">—</span></div>
+        <div class="it cur"><span class="dot"></span><span class="n">503122 · 宝箱怪</span><span class="f">118</span></div>
+        <div class="it"><span class="dot"></span><span class="n">504001 · 鲛精</span><span class="f">—</span></div>
+        <div class="it"><span class="dot"></span><span class="n">504002 · 杨硕(魔化版)</span><span class="f">—</span></div>
+        <div class="it"><span class="dot"></span><span class="n">504014 · 宇文拓(魔化版)</span><span class="f">—</span></div>
+      </div>
+      <div class="cnt">单部件资源不显示展开箭头</div>
+    </div>
+
+    <!-- 中栏：舞台（主角）+ 时间轴（A 区改成胶片条，兼当进度条） -->
+    <div class="col mid">
+      <div class="sh">
+        <span class="title">503122 · 宝箱怪</span>
+        <span class="meta">SE · idle · 8 帧 0001–0008 · <span class="ok">帧号连续</span></span>
+        <div class="sp"></div>
+        <div class="seg"><span class="on">画布对齐</span><span>内容裁剪</span></div>
+        <div class="seg"><span class="on">透明</span><span>棋盘格</span></div>
+      </div>
+      <div class="stage">
+        <div class="ground"></div><div class="cross"></div>
+        <svg width="150" height="130" viewBox="0 0 150 130" aria-label="宝箱怪当前帧">
+          <rect x="22" y="58" width="106" height="58" rx="6" fill="#8E2E26" stroke="#2F6F5E" stroke-width="5"/>
+          <path d="M22 60 Q75 6 128 60 Z" fill="#A83A2F" stroke="#2F6F5E" stroke-width="5"/>
+          <rect x="66" y="66" width="18" height="22" rx="3" fill="#D4AF37"/>
+          <circle cx="40" cy="104" r="7" fill="#3E8E74"/><circle cx="52" cy="110" r="6" fill="#3E8E74"/>
+        </svg>
+        <div class="zoom seg"><span class="on">适应</span><span>1×</span><span>2×</span><span>4×</span></div>
+        <div class="hint">画布内点击 / 拖拽 = 切方向 · Ctrl+滚轮缩放 · 空格播放</div>
+      </div>
+      <div class="tl">
+        <div class="ctrl">
+          <span class="btn pri">⏸ 暂停中</span><span class="btn">◀</span><span class="btn">▶</span>
+          <span class="muted">帧</span><span class="fnum">3 / 8</span>
+          <span class="muted" style="margin-left:10px">FPS</span><div class="slider"><i></i></div><span class="fnum">12</span>
+          <span class="btn pri">循环</span>
+          <div class="sp"></div>
+          <div class="seg"><span class="on">胶片条</span><span>整页网格</span></div>
+        </div>
+        <div class="strip" id="strip"></div>
+      </div>
+    </div>
+
+    <!-- 右栏：检查器 = 「看什么 / 查出了什么」 -->
+    <div class="col right">
+      <div class="sec">
+        <h4><span>方向 × 动作</span><span>合计 118 帧</span></h4>
+        <div class="mx" id="mx"></div>
+        <div class="lg">
+          <span><i style="background:var(--page-card);border:1px solid var(--page-border)"></i>有资源（帧数）</span>
+          <span><i style="background:rgba(199,68,68,.4)"></i>缺 / 空帧</span>
+          <span><i style="border:1px dashed #5A6068"></i>不适用</span>
+          <span><i style="border:2px solid var(--page-gold)"></i>当前</span>
+        </div>
+      </div>
+      <div class="sec">
+        <h4><span>显示层</span><span>1 层</span></h4>
+        <div class="tg"><span class="box"></span>整体</div>
+        <div class="muted">单部件资源，无叠层与穿戴项</div>
+      </div>
+      <div class="sec">
+        <h4><span>检查结果</span></h4>
+        <div class="res">
+          <div class="ok">✓ 无缺方向 / 缺动作</div>
+          <div class="ok">✓ 各动作帧号连续</div>
+          <div class="ok">✓ 无空帧 · 无多余动作</div>
+          <div class="muted">问题出现时逐条列在这里，点一条直接跳到对应格子</div>
+        </div>
+      </div>
+      <div class="sec">
+        <h4><span>资源信息</span></h4>
+        <div class="kv"><span>部件</span><span>1</span><span>原画布</span><span>— × —</span><span>内容 bbox</span><span>— × —</span><span>路径</span><span>…\503122</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 状态栏：只留全局与一次性提示 -->
+  <div class="st"><span><b>13</b> 组资源</span><span><b>0</b> 组有问题</span><span>自动刷新 开</span><div class="sp"></div><span>已复制第 0003 帧（去透明边缘）</span></div>
+</div>
+</div>
+
+<script>
+// 胶片条：8 帧，第 3 帧为当前帧
+const strip=document.getElementById('strip');
+const chest='<svg viewBox="0 0 150 130"><rect x="22" y="58" width="106" height="58" rx="6" fill="#8E2E26" stroke="#2F6F5E" stroke-width="6"/><path d="M22 60 Q75 6 128 60 Z" fill="#A83A2F" stroke="#2F6F5E" stroke-width="6"/></svg>';
+for(let i=1;i<=8;i++){
+  const d=document.createElement('div');d.className='fr'+(i===3?' cur':'');
+  d.innerHTML=chest+'<small>'+String(i).padStart(4,'0')+'</small>';strip.appendChild(d);
+}
+// 方向×动作矩阵：按截图数据（SE/NW 7 个动作，E/N/S 只有 idle/run，合计 118 帧）
+const dirs=['E','N','NW','S','SE'];
+const acts=['idle','run','attack','skill','hurt','block','dead','ride_idle','ride_run'];
+const full={idle:8,run:8,attack:8,skill:8,hurt:1,block:1,dead:1};
+const lite={idle:8,run:8};
+const data={E:lite,N:lite,NW:full,S:lite,SE:full};
+const mx=document.getElementById('mx');
+mx.insertAdjacentHTML('beforeend','<div></div>');
+dirs.forEach(d=>mx.insertAdjacentHTML('beforeend','<div class="h" style="'+(d==='SE'?'color:var(--page-gold)':'')+'">'+d+'</div>'));
+acts.forEach(a=>{
+  mx.insertAdjacentHTML('beforeend','<div class="a" style="'+(a==='idle'?'color:var(--page-gold)':'')+'">'+a+'</div>');
+  dirs.forEach(d=>{
+    const v=data[d][a];
+    let cls='c'+(d==='SE'?' colcur':'');
+    if(v===undefined) cls+=' na';
+    if(d==='SE'&&a==='idle') cls+=' cur';
+    mx.insertAdjacentHTML('beforeend','<div class="'+cls+'">'+(v===undefined?'·':v)+'</div>');
+  });
+});
+</script>
+</body></html>

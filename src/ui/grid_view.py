@@ -15,7 +15,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QPoint, QSize, QRect, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QLayout, QLayoutItem, QPushButton,
+    QButtonGroup, QFrame, QHBoxLayout, QLabel, QLayout, QLayoutItem, QPushButton,
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
@@ -261,26 +261,51 @@ class GridView(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
-        # 标题行：标题 + 右侧「原图/自适应」切换按钮
+        # 标题行：标题 + 右侧「原图 | 自适应」两段式切换
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
-        header.setSpacing(8)
-        self._title = QLabel("A · 序列帧网格（100% 原尺寸 · 并集 bbox · 透明）")
-        self._title.setStyleSheet("color: #96A1AD; font-size: 12px; letter-spacing: 1px;")
-        header.addWidget(self._title)
-        header.addStretch()
-        self._mode_btn = QPushButton("自适应")
-        self._mode_btn.setCheckable(True)
-        self._mode_btn.setCursor(Qt.PointingHandCursor)
-        self._mode_btn.setFixedHeight(22)
-        self._mode_btn.setStyleSheet(
+        header.setSpacing(0)
+        self._title = QLabel("A · 序列帧网格")
+        # M44.1：区标题字号 12 → 14
+        self._title.setStyleSheet("color: #96A1AD; font-size: 14px; letter-spacing: 1px;")
+        # M44.1：标题放不下时允许被截短，不要反过来把右边的「原图|自适应」按钮挤出去
+        self._title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._title.setMinimumWidth(0)
+        header.addWidget(self._title, 1)
+        header.addSpacing(8)          # 标题和按钮之间留点空隙，截短时不会贴着按钮
+        # M44.1：原来是单个按钮，文字显示的是「点了会变成什么」（选中自适应时写着「原图」），
+        # 和其他开关「高亮 = 当前状态」的逻辑相反，容易看反。
+        # 现在改成两个并排按钮，哪个金色高亮就是当前模式，文字固定不变。
+        #   - self._orig_btn：原图（100% 原尺寸）
+        #   - self._mode_btn：自适应（一屏全显）——沿用旧名字，
+        #     app.py 里 `_mode_btn.isChecked()` = 是否自适应 的用法完全不变
+        seg_style = (
             "QPushButton { color: #96A1AD; background: #2A2E33; border: 1px solid #3A3F46;"
-            " border-radius: 4px; padding: 0 10px; font-size: 12px; }"
-            "QPushButton:hover { color: #E8E4D9; border-color: #4A4F56; }"
-            "QPushButton:checked { color: #1E2023; background: #D4AF37; border-color: #D4AF37; }"
+            " padding: 0 10px; font-size: 13px; }"
+            "QPushButton:hover { color: #E8E4D9; }"
+            "QPushButton:checked { color: #1E2023; background: #D4AF37; border-color: #D4AF37;"
+            " font-weight: 600; }"
         )
+        self._orig_btn = QPushButton("原图")
+        self._mode_btn = QPushButton("自适应")
+        for btn, corner in ((self._orig_btn, "border-top-left-radius: 4px; border-bottom-left-radius: 4px;"),
+                            (self._mode_btn, "border-top-right-radius: 4px; border-bottom-right-radius: 4px;")):
+            btn.setCheckable(True)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setFixedHeight(24)
+            # 左按钮圆左角、右按钮圆右角，拼起来像一个整体
+            btn.setStyleSheet(seg_style.replace("font-size: 13px; }", f"font-size: 13px; {corner} }}", 1))
+            header.addWidget(btn)
+        self._orig_btn.setToolTip("原图：100% 原尺寸显示，超出时滚动")
+        self._mode_btn.setToolTip("自适应：全部帧一屏显示；缩略图按内容裁剪，不受「画布对齐」影响")
+        self._orig_btn.setChecked(True)               # 默认原图（与旧版默认一致）
+        # QButtonGroup 设为互斥：同一时间只能有一个按钮按下
+        self._mode_group = QButtonGroup(self)
+        self._mode_group.setExclusive(True)
+        self._mode_group.addButton(self._orig_btn)
+        self._mode_group.addButton(self._mode_btn)
+        # 只监听「自适应」按钮：点原图时它会自动弹起，同样触发 toggled(False)
         self._mode_btn.toggled.connect(self._on_mode_toggled)
-        header.addWidget(self._mode_btn)
         layout.addLayout(header)
 
         self._scroll = QScrollArea()
@@ -304,6 +329,10 @@ class GridView(QFrame):
         layout.addWidget(self._scroll, 1)
 
         self._canvas_align = False                  # M34 固定画布对齐（随 show_sequence 传入）
+        # M44.1：记住上一次 show_sequence 的参数。切换「原图/自适应」时，
+        # 如果画布对齐是开的，需要用另一种对齐方式重新解码一遍（见 _on_mode_toggled）
+        self._last_args: tuple | None = None
+        self._requested_align = False               # 调用方要求的画布对齐（不论当前模式）
         self._worker: DecodeWorker | None = None
         self._cells: list[_FrameCell] = []
         self._pending: list[tuple[int, object, str]] = []  # (idx, PIL.Image, label) 缓存
@@ -334,15 +363,24 @@ class GridView(QFrame):
         跨视图（有无武器/不同部件组合）角色位置纹丝不动。
         """
         self._stop_worker()
+        # M44.1：先记下调用方给的参数，切换模式时可以原样重放
+        self._last_args = (layers, flat_mask, fx_offsets)
+        self._requested_align = canvas_align
         if not layers or all(len(layer) == 0 for layer in layers):
             self._clear_cells()
             self._title.setText("A · 序列帧网格（无帧）")
             return
         self._title.setText("A · 序列帧网格 · 解码中…")
         self._pending = []
-        self._canvas_align = canvas_align           # M34：标题文案用
+        # M44.1：自适应模式固定用「内容裁剪」（全序列并集 bbox），不用画布对齐。
+        # 原因：画布对齐时每帧都是整张渲染画布（主角常见 875×875），
+        # 一屏塞 8 帧后角色只剩约 20px，几乎看不清（宝箱怪实测）。
+        # 并集 bbox 下同一序列的各帧仍然互相对齐，不影响看帧间位移；
+        # 「原图」模式继续尊重画布对齐开关（M34）。
+        effective_align = canvas_align and not self._mode_btn.isChecked()
+        self._canvas_align = effective_align        # 标题文案用：实际生效的对齐方式
         self._worker = DecodeWorker(layers, flat_mask=flat_mask, fx_offsets=fx_offsets,
-                                    canvas_align=canvas_align)
+                                    canvas_align=effective_align)
         self._worker.frame_ready.connect(self._on_frame)
         self._worker.finished.connect(self._on_done)
         self._worker.start()
@@ -393,13 +431,16 @@ class GridView(QFrame):
         # M36：整条序列全透明 → 标题标注空帧占位
         all_blank = getattr(self._worker, "all_blank", False)
         blank_seg = "⚠ 空帧占位 · " if all_blank else ""
-        self._title.setText(f"A · 序列帧网格（{total} 帧 · {blank_seg}{self._mode_text()}）")
+        self._title.setText(f"A · {total} 帧 · {blank_seg}{self._mode_text()}")
 
     def _mode_text(self) -> str:
-        """标题模式段：缩放模式 + 对齐模式（M34）。"""
-        mode = "自适应一屏全显" if self._mode_btn.isChecked() else "100% 原尺寸"
-        align = "画布对齐" if self._canvas_align else "并集 bbox"
-        return f"{mode} · {align}"
+        """标题里的对齐方式段（M34：画布对齐 / 内容裁剪）。"""
+        # M44.1：模式（原图/自适应）已经由两段式按钮显示，标题里只写对齐方式，
+        # 避免标题太长被按钮压住（实测截图「A · 序列帧网格（8 帧 · 自适…」）
+        # M44.1：自适应模式下即使开了画布对齐，A 区也按内容裁剪（见 show_sequence），
+        # 标题写「内容裁剪」，避免和顶栏「画布对齐」按钮的状态看起来矛盾
+        align = "画布对齐" if self._canvas_align else "内容裁剪"
+        return align
 
     def _build_cells(self) -> None:
         """根据当前模式（原图/自适应）构建所有 cell。"""
@@ -480,12 +521,18 @@ class GridView(QFrame):
             self._cells.append(cell)
 
     def _on_mode_toggled(self, checked: bool) -> None:
-        """切换原图/自适应。"""
-        self._mode_btn.setText("原图" if checked else "自适应")
+        """切换原图/自适应（checked=True 表示切到自适应）。"""
+        # M44.1：按钮文字固定（两段式），不再在这里改文字。
+        # 画布对齐开着时，两种模式实际用的对齐方式不同（原图=画布对齐，自适应=内容裁剪），
+        # 只重排格子不够，必须用新的对齐方式重新解码一遍。
+        if self._requested_align and self._last_args is not None:
+            layers, flat_mask, fx_offsets = self._last_args
+            self.show_sequence(layers, flat_mask, fx_offsets, canvas_align=True)
+            return
+        # 画布对齐关着：两种模式对齐方式相同，沿用旧逻辑只重排格子（不重新解码，更快）
         if self._loaded:
             self._build_cells()
-            self._title.setText(
-                f"A · 序列帧网格（{len(self._loaded)} 帧 · {self._mode_text()}）")
+            self._title.setText(f"A · {len(self._loaded)} 帧 · {self._mode_text()}")
 
     def resizeEvent(self, event) -> None:
         """视口宽度变化时，自适应模式重算布局。"""
