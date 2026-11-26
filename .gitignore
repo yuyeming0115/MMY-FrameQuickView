@@ -13,3 +13,6 @@ releases/
 .workbuddy-ai/*
 !.workbuddy-ai/memory/
 稳定版
+
+# M45 golden：自动生成的套装测试目录（每次 record/check 都会重新生成）
+tests/golden/fixture_outfit/

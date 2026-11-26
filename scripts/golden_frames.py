@@ -30,6 +30,7 @@ M45 要把「叠哪些层」（app._layers_for_current）和「怎么渲染一�
     #   --per-cat 2        每种资源类型抽几个（越多越慢）
     #   --max-combos 10    每个资源最多录几个「方向×动作」组合
     #   --out 路径         标准答案文件位置（默认 tests/golden/m45_frames.json）
+    #   --no-fixture       不加自动生成的套装目录（默认会加，用来覆盖套装合并 M23 / 套装内特效 M25）
 
 ⚠ 改代码时请保留下面两个「接口适配」函数能用：
     current_recipe(win)  —— 现在调用 win._layers_for_current()
@@ -57,6 +58,75 @@ from PySide6.QtWidgets import QApplication                  # noqa: E402
 
 DEFAULT_ROOT = r"E:\XYJProject\美术资源\动画序列帧\角色输出图"
 DEFAULT_OUT = ROOT_DIR / "tests" / "golden" / "m45_frames.json"
+# 自动生成的「套装」小目录：真实目录里主角套装都已拆成单独文件夹，不会触发
+# 套装合并（M23）和套装内特效（M25），但这两段代码重构时也要搬，所以用它兜底。
+# 每次运行都重新生成，像素完全一样；已加入 .gitignore，不用提交。
+FIXTURE_DIR = ROOT_DIR / "tests" / "golden" / "fixture_outfit"
+
+
+def build_fixture(root: Path) -> None:
+    """生成固定内容的套装目录（record 和 check 前都会调用，保证两次一模一样）。
+
+    结构（和 AGENTS.md 里的套装示例一致）：
+        fixture_outfit/
+        ├── 501521005_女侠客_部件/          ← 套装 1：5 个跨 ID 部件 + 1 个特效
+        │   ├── 501031005_shadow  501031005_weapon  501511005_hair
+        │   ├── 501521005_body    501521005_shadow
+        │   └── 50105101/changrao_1.png …  ← 扁平特效（M25：并入套装、置顶）
+        └── 月河郡主（琴）/                  ← 套装 2：纯中文名、无特效
+            └── 501031004_shadow  501031004_weapon  501421004_body
+    每个部件：E / SE 两个方向 × idle(8 帧) / attack(6 帧)，画布 200×200。
+    各部件位置、大小、半透明程度都不同，并且逐帧移动，这样对齐算法哪里错了都能看出来。
+    """
+    from PIL import Image, ImageDraw
+    if root.exists():
+        shutil.rmtree(root)
+    W = H = 200
+
+    def draw_frames(folder: Path, names: list[str], box_of, color) -> None:
+        """在 folder 里按 names 逐帧画一个矩形；box_of(第几帧) 返回矩形位置。"""
+        folder.mkdir(parents=True, exist_ok=True)
+        for i, name in enumerate(names):
+            img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            x0, y0, x1, y1 = box_of(i)
+            ImageDraw.Draw(img).rectangle([x0, y0, x1 - 1, y1 - 1], fill=color)
+            img.save(folder / name)
+
+    # 各部件在画布上的基础位置 (x0, y0, x1, y1) 和颜色（第 4 个数是透明度）
+    looks = {
+        "shadow_body":   ((70, 150, 130, 162), (0, 0, 0, 110)),       # 半透明影子
+        "shadow_weapon": ((30, 150, 70, 158),  (0, 0, 0, 90)),
+        "body":          ((80, 60, 120, 150),  (200, 80, 60, 255)),
+        "hair":          ((82, 45, 118, 70),   (60, 40, 30, 255)),
+        "weapon":        ((35, 90, 80, 110),   (220, 200, 90, 230)),
+    }
+    actions = [("idle", 8), ("attack", 6)]
+
+    def make_part(folder: Path, look: str, step: int) -> None:
+        (bx0, by0, bx1, by1), color = looks[look]
+        for di, direction in enumerate(("E", "SE")):
+            num = 1                        # 同方向内跨动作连续编号（idle 0001-0008，attack 0009-0014）
+            for ai, (action, n) in enumerate(actions):
+                names = [f"{num + k:04d}.png" for k in range(n)]
+                num += n
+                dx0 = di * 12 + ai * 5     # 不同方向/动作整体错开一点
+                draw_frames(folder / direction / action, names,
+                            lambda k: (bx0 + dx0 + k * step, by0, bx1 + dx0 + k * step, by1), color)
+
+    o1 = root / "501521005_女侠客_部件"
+    make_part(o1 / "501031005_shadow", "shadow_weapon", 2)
+    make_part(o1 / "501031005_weapon", "weapon", 3)
+    make_part(o1 / "501511005_hair", "hair", 1)
+    make_part(o1 / "501521005_body", "body", 1)
+    make_part(o1 / "501521005_shadow", "shadow_body", 1)
+    # 扁平特效：5 帧，每帧大小不同（检验「按整条序列并集居中、不抖动」）
+    draw_frames(o1 / "50105101", [f"changrao_{k + 1}.png" for k in range(5)],
+                lambda k: (60 - k * 6, 40 - k * 4, 100 + k * 10, 90 + k * 8), (90, 140, 240, 160))
+
+    o2 = root / "月河郡主（琴）"
+    make_part(o2 / "501031004_shadow", "shadow_weapon", 2)
+    make_part(o2 / "501031004_weapon", "weapon", 3)
+    make_part(o2 / "501421004_body", "body", 1)
 
 
 # =====================================================================
@@ -232,7 +302,8 @@ def undo_target(win, target) -> None:
         win._dressed_fx.pop(target["key"], None)
 
 
-def run_cases(app, win, targets: list[dict], max_combos: int, fixed_combos: dict | None = None) -> dict:
+def run_cases(app, win, targets: list[dict], max_combos: int, fixed_combos: dict | None = None,
+              tag: str = "") -> dict:
     """逐个对象、逐个组合合成画面并记录指纹。
 
     fixed_combos：check 模式下传入 —— 直接用标准答案里录过的组合，保证两次比的是同一批。
@@ -243,7 +314,9 @@ def run_cases(app, win, targets: list[dict], max_combos: int, fixed_combos: dict
         if not apply_target(win, target):
             print(f"  [{n}/{len(targets)}] ⚠ 找不到 {target['cat']} {target['key']}，跳过")
             continue
-        tid = f"{target['cat']}|{target['key']}"
+        # tag = 资源目录名：local-role 是由角色输出图打包的，两边 ID 完全相同，
+        # 不带目录名的话后录的会覆盖先录的（首次补录时 148 个组合被覆盖成 36 个）
+        tid = f"{tag}|{target['cat']}|{target['key']}"
         if fixed_combos is not None:
             combos = [tuple(c) for c in fixed_combos.get(tid, [])]
         else:
@@ -293,6 +366,8 @@ def main() -> int:
     ap.add_argument("--per-cat", type=int, default=2)
     ap.add_argument("--max-combos", type=int, default=10)
     ap.add_argument("--out", default=str(DEFAULT_OUT))
+    ap.add_argument("--no-fixture", action="store_true",
+                    help="record 时不加自动生成的套装目录（默认会加）")
     args = ap.parse_args()
 
     out_path = Path(args.out)
@@ -308,10 +383,18 @@ def main() -> int:
             roots = [Path(r) for r in golden["meta"]["roots"]]
         else:
             roots = [Path(r) for r in (args.root or [DEFAULT_ROOT])]
+            if not args.no_fixture:
+                roots.append(FIXTURE_DIR)
 
         all_cases: dict = {}
         all_targets: dict = {}
+        used_tags: set[str] = set()
         for i, root in enumerate(roots):
+            # 每个目录一个短标签（目录名），重名时加序号
+            tag = root.name if root.name not in used_tags else f"{root.name}#{i}"
+            used_tags.add(tag)
+            if root == FIXTURE_DIR:
+                build_fixture(root)            # 每次重新生成，像素和上次完全一样
             if not root.is_dir():
                 print(f"❌ 目录不存在：{root}")
                 return 2
@@ -331,7 +414,12 @@ def main() -> int:
                 fixed = golden["meta"]["combos"]
             all_targets[str(root)] = [{k: v for k, v in t.items() if not k.startswith("_")}
                                       for t in targets]
-            all_cases.update(run_cases(app, win, targets, args.max_combos, fixed))
+            got = run_cases(app, win, targets, args.max_combos, fixed, tag=tag)
+            overlap = set(got) & set(all_cases)
+            if overlap:                          # 保险：理论上不会再发生
+                print(f"❌ 组合编号重复 {len(overlap)} 个，例如 {next(iter(overlap))}")
+                return 2
+            all_cases.update(got)
             win.close()
 
         if golden is None:
@@ -352,7 +440,27 @@ def main() -> int:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
             n_frames = sum(len(v) for c in all_cases.values() for v in c["frames"].values())
+            per_root: dict = {}
+            for cid in all_cases:
+                per_root[cid.split("|", 1)[0]] = per_root.get(cid.split("|", 1)[0], 0) + 1
             print(f"\n✅ 已录制 {len(all_cases)} 个组合、{n_frames} 帧 → {out_path}")
+            print("   各目录组合数：" + "，".join(f"{k} {v}" for k, v in per_root.items()))
+
+            # 附带检查（只提示，不算失败）：图集目录是由散帧目录打包的，同一个资源
+            # 在两边合成出的画面理论上应该一模一样（M40 宣称「像素级 0 误差」还原）
+            body = {}
+            for cid, c in all_cases.items():
+                tag_, rest = cid.split("|", 1)
+                body.setdefault(rest, {})[tag_] = c["frames"]
+            pairs_ = [v for v in body.values() if len(v) >= 2]
+            if pairs_:
+                def pixels_only(frames: dict) -> str:
+                    # 只比像素指纹（冒号前），不比帧号标签：图集帧和散帧文件的名字写法可能不同
+                    return json.dumps({m: [s.split(":", 1)[0] for s in v] for m, v in frames.items()},
+                                      sort_keys=True)
+                same = sum(1 for v in pairs_ if len({pixels_only(x) for x in v.values()}) == 1)
+                print(f"   附带：{len(pairs_)} 个组合在两个目录都录到，其中 {same} 个画面完全相同"
+                      + ("（图集还原与散帧一致 ✓）" if same == len(pairs_) else "（不同的可能是图集还原或打包差异，可留意）"))
             return 0
 
         # ---- check：逐项比对 ----

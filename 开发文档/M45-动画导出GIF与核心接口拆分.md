@@ -348,7 +348,10 @@ def plan_export(target, scope: str, look, ctx, tpl) -> list[tuple[str, str]]:
 - 改造**后**跑 `check`：按标准答案里录过的同一批组合重渲染，指纹必须 100% 一致；再跑全量回归测试。
 - 差异分两类：「配方不同」= 叠哪些层搬错了（compose）；「画面不同」= 渲染对齐搬错了（render）。
 - 只读保证：QSettings 隔离到临时 ini；关闭匹配表「新 ID 自动登记」；不碰任何资源文件。
-- 图集资源（M40）在另一个目录，录制时用 `--root` 多加一次该目录。
+- 图集资源（M40）在另一个目录（`E:\XYJProject\美术资源\动画序列帧\local-role`，由角色输出图打包而来），录制时用 `--root` 多加一次该目录。
+- 套装组（M23）/ 套装内特效（M25）：真实目录里主角套装已拆成单独文件夹，不会触发套装合并；脚本默认自动生成
+  `tests/golden/fixture_outfit/`（2 个套装：5 部件 + 扁平特效、3 部件纯中文名；E/SE × idle/attack，像素固定，
+  各部件位置/透明度/逐帧位移不同），覆盖这两段代码。该目录已加入 `.gitignore`。加 `--no-fixture` 可关闭。
 - 脚本通过 `current_recipe(win)` / `render(...)` 两个适配函数调用现有代码；重构后入口若改名，只改这两个函数。
 
 ```bash
@@ -413,3 +416,5 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe scripts/golden_frames.py chec
 |------|------|
 | 2026-11-26 | 建档：模块化现状评估、compose / render / export 接口设计、GIF 导出方案、分阶段计划 |
 | 2026-11-26 | 阶段 A 第一步：新增 `scripts/golden_frames.py`（record / check 逐帧指纹比对，只读） |
+| 2026-11-26 | 首次 record：角色输出图 148 组合 / 2376 帧，未改代码 check 148/148 一致（可重复）；补充自动生成套装目录 + local-role 图集目录 |
+| 2026-11-26 | 修复 golden 脚本组合编号冲突：local-role 由角色输出图打包，两边 ID 相同，后录的覆盖先录的（148→36）；组合编号加目录名前缀；record 附带比对「同一资源图集 vs 散帧」像素是否一致（只提示） |
