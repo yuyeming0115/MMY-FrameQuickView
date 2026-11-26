@@ -180,7 +180,7 @@ def main():
         # ---------------- 6. 快捷键注册 ----------------
         print("== 6. 主窗口快捷键 ==")
         keys = sorted(sc.key().toString() for sc in win._shortcuts)
-        assert keys == sorted([",", ".", "End", "Home", "Space"]), f"快捷键清单不符: {keys}"
+        assert keys == sorted([",", ".", "Ctrl+E", "End", "Home", "Space"]), f"快捷键清单不符: {keys}"  # M45 加了 Ctrl+E 导出
         print(f"  ✓ 已注册 {keys}")
 
         # ---------------- 7. 状态栏文案 ----------------

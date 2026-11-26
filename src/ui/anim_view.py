@@ -562,6 +562,7 @@ class AnimView(QFrame):
     fx_offset_changed = Signal(str, int, int)  # (part_key, dx, dy) 特效偏移微调
     hud_toggled = Signal(bool)  # M32：HUD 信息面板开关变化（上层持久化用）
     layer_panel_toggled = Signal(bool)  # M36.2：显示层面板开关变化（上层持久化用）
+    export_requested = Signal()  # M45：点了「⤓ 导出」按钮（具体导出由主窗口负责）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -574,7 +575,26 @@ class AnimView(QFrame):
         self._title = QLabel("B · GIF 动画预览（并集 bbox · 防抖动）")
         # M44.1：区标题字号 12 → 14（正文 ≥14px 规范）
         self._title.setStyleSheet("color: #96A1AD; font-size: 14px; letter-spacing: 1px;")
-        outer.addWidget(self._title)
+        # M45：标题行右侧放「⤓ 导出」按钮。底栏已经放满了，标题行右边是空的
+        #（M44 新布局里导出入口也在舞台标题行）。标题放不下时自己被截短，不挤按钮。
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(8)
+        self._title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._title.setMinimumWidth(0)
+        header.addWidget(self._title, 1)
+        self._export_btn = QPushButton("⤓ 导出")
+        self._export_btn.setToolTip("把当前动画导出成 GIF / APNG（快捷键：Ctrl+E）\n"
+                                    "叠层、穿戴和预览完全一样")
+        self._export_btn.setFixedHeight(24)
+        self._export_btn.setStyleSheet(
+            "QPushButton { background: #2A2E33; border: 1px solid #3A3F46; border-radius: 4px;"
+            " color: #E8E4D9; padding: 0 12px; font-size: 13px; }"
+            "QPushButton:hover { border-color: #D4AF37; color: #D4AF37; }"
+        )
+        self._export_btn.clicked.connect(self.export_requested)
+        header.addWidget(self._export_btn)
+        outer.addLayout(header)
 
         # M35：按钮矩阵独立列（不再悬浮遮挡画布）——左 = 矩阵列 | 右 = 画布区
         body = QHBoxLayout()

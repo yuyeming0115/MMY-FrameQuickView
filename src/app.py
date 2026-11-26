@@ -4,15 +4,16 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QFileSystemWatcher, QSettings, Qt, QTimer, QThread, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtCore import QEvent, QFileSystemWatcher, QSettings, Qt, QTimer, QThread, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
+    QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
     QMessageBox, QPushButton, QSplitter, QVBoxLayout, QWidget,
 )
 
 from .core.blankcheck import blank_sequences
 from .core import compose      # M45：叠层配方（叠哪些层、穿戴什么）
+from .core.export import default_output_dir, is_inside, safe_name   # M45：动画导出
 from .core.cleanup import (
     CleanupItem,
     cleanup_target_parts,
@@ -28,6 +29,8 @@ from .ui.anim_view import AnimView
 from .ui.button_matrix import ButtonMatrix
 from .ui.cleanup_dialog import CleanupConfirmDialog
 from .ui.drop_zone import DropZone
+from .ui.export_dialog import ExportDialog      # M45：导出弹窗
+from .ui.export_worker import ExportWorker      # M45：导出后台线程
 from .ui.grid_view import GridView
 from .ui.part_list import PartList
 from .ui.template_editor import TemplateEditorDialog
@@ -126,6 +129,7 @@ class MainWindow(QMainWindow):
         self._dressed_weapon: dict[str, str] = self._load_dressed_look("weapon")
         # M28：真正的特效层下标（穿戴的翅膀也算 flat 层，但不需要微调 → 排除）
         self._fx_layer_indices: set[int] = set()
+        self._export_worker: ExportWorker | None = None   # M45：正在进行的导出（同一时间只做一个）
         # fills 警告检测开关（M37 起默认关：BOSS/主角等无 fills 部件的资源满屏 🟠 降噪；
         # QSettings 记忆，用户开过则保持其选择）
         self._fills_check = bool(self._settings.value("checks/fills", False, type=bool))
@@ -284,6 +288,8 @@ class MainWindow(QMainWindow):
         self.anim_view.hud_toggled.connect(self._on_hud_toggled)
         # M36.2：显示层面板开关持久化
         self.anim_view.layer_panel_toggled.connect(self._on_layer_panel_toggled)
+        # M45：B 区标题行「⤓ 导出」
+        self.anim_view.export_requested.connect(self._on_export_requested)
         panes.addWidget(self.grid_view)
         panes.addWidget(self.anim_view)
         panes.setStretchFactor(0, 5)
@@ -331,6 +337,7 @@ class MainWindow(QMainWindow):
             (".", lambda: self.anim_view.step_frame(+1)),
             ("Home", lambda: self.anim_view.goto_edge(last=False)),
             ("End", lambda: self.anim_view.goto_edge(last=True)),
+            ("Ctrl+E", self._on_export_requested),        # M45：导出当前动画
         ]
         self._shortcuts: list[QShortcut] = []
         for keys, handler in bindings:
@@ -1532,8 +1539,123 @@ class MainWindow(QMainWindow):
         if self._result and self._result.root and self._tpl:
             self._on_folder_dropped(self._result.root)
 
+    # ---------------- M45：导出当前动画（GIF / APNG）----------------
+    def _export_name(self, target) -> str:
+        """导出文件夹用的资源名，如「503122_宝箱怪」「501521005_女侠客」。"""
+        if hasattr(target, "parts"):                       # 组
+            label = self._look_group_label(target)          # 中文名，没有就是组名/ID
+            if label.startswith(target.res_id):             # 套装组名本来就带 ID
+                return label
+            return f"{target.res_id}_{label}" if label != target.res_id else target.res_id
+        cn = self._namemap.lookup(target.name, target.res_id) if self._namemap else None
+        return f"{target.name}_{cn}" if cn else target.name    # 单部件
+
+    def _layer_display_names(self, keys: list[str]) -> list[str]:
+        """把叠层的层名换成给人看的中文名（导出弹窗「本次叠层」用）。"""
+        names: dict[str, str] = {}
+        if self._group is not None:
+            display = self._display_parts(self._group)
+            names = {self._toggle_key(p, display): self._toggle_label(p, display) for p in display}
+        out = []
+        for k in keys:
+            if k in names:
+                out.append(names[k])
+            else:                                           # 穿戴进来的部件：按文件夹名查匹配表
+                cn = self._namemap.lookup(k, k.split("_")[0]) if self._namemap else None
+                out.append(cn or k)
+        return out
+
+    def _export_job(self) -> dict | None:
+        """收集「要导出什么」：当前选中项 + 方向/动作 + 叠层配方。没法导出时返回 None 并提示原因。"""
+        if self._group is None and self._part is None:
+            self.statusBar().showMessage("⤓ 导出：请先在左栏选中一个资源", 4000)
+            return None
+        direction, action = self.matrix.current()
+        if not direction or not action:
+            self.statusBar().showMessage("⤓ 导出：请先选择方向和动作", 4000)
+            return None
+        target = self._part if self._part is not None else self._group
+        # 和预览走同一份叠层代码（core/compose.py），保证导出 = 预览
+        stack = compose.build_stack(target, direction, action,
+                                    self._look_for(self._group), self._compose_ctx())
+        n = max((len(layer) for layer in stack.layers), default=0)
+        if n == 0:
+            self.statusBar().showMessage(f"⤓ 导出：{direction} · {action} 没有帧", 4000)
+            return None
+        return {"target": target, "direction": direction, "action": action,
+                "stack": stack, "frames": n, "name": self._export_name(target)}
+
+    def _on_export_requested(self) -> None:
+        """点「⤓ 导出」或按 Ctrl+E：弹出导出弹窗 → 检查输出位置 → 后台导出。"""
+        if self._export_worker is not None and self._export_worker.isRunning():
+            self.statusBar().showMessage("⤓ 上一个导出还没完成，请稍等", 4000)
+            return
+        job = self._export_job()
+        if job is None:
+            return
+        root = self._last_folder or (self._result.root if self._result else Path.home())
+        d, a = job["direction"], job["action"]
+        dlg = ExportDialog(
+            self,
+            name=job["name"].replace("_", " · ", 1),
+            subtitle=f"{d} · {a} · {job['frames']} 帧",
+            layers=" · ".join(self._layer_display_names(job["stack"].part_keys)),
+            fps=self.anim_view._fps,
+            default_dir=default_output_dir(Path(root)),
+            rel_path=f"{safe_name(job['name'])}/{safe_name(f'{d}_{a}')}",
+            settings=self._settings,
+        )
+        if dlg.exec() != QDialog.Accepted:
+            return
+        opts = dlg.options()
+        out_path = dlg.output_path()
+        # 输出到扫描目录里面：会触发自动刷新重扫（M24），APNG 还可能被当成资源扫进来
+        if is_inside(out_path.parent, Path(root)):
+            ans = QMessageBox.question(
+                self, "导出动画",
+                f"输出位置在正在浏览的资源目录里面：\n{out_path.parent}\n\n"
+                "导出后会触发自动刷新，导出的文件也可能被当成资源扫进来。\n仍要导出到这里吗？")
+            if ans != QMessageBox.Yes:
+                return
+        if out_path.exists():
+            ans = QMessageBox.question(self, "导出动画", f"文件已存在，覆盖吗？\n{out_path}")
+            if ans != QMessageBox.Yes:
+                return
+        # 「按内容裁剪」时一律按原始画布渲染再裁：不同方向/动作之间角色位置不跳；
+        # 「与预览一致」时按预览当前的画布对齐开关
+        canvas_align = True if opts.crop_padding is not None else self._canvas_align
+        self._start_export(job["stack"], opts, out_path, canvas_align)
+
+    def _start_export(self, stack, opts, out_path: Path, canvas_align: bool) -> None:
+        self._export_worker = ExportWorker(stack, opts, out_path, canvas_align, self)
+        self._export_worker.done.connect(self._on_export_done)
+        self._export_worker.failed.connect(self._on_export_failed)
+        self.statusBar().showMessage(f"⤓ 正在导出 {out_path.name} …")
+        self._export_worker.start()
+
+    def _on_export_done(self, path: str, info: dict) -> None:
+        w, h = info["size"]
+        msg = f"{info['frames']} 帧 · {w}×{h} · {info['fps']:g} fps"
+        self.statusBar().showMessage(f"⤓ 已导出 {Path(path).name}（{msg}）", 8000)
+        box = QMessageBox(self)
+        box.setWindowTitle("导出完成")
+        box.setText(f"已导出：\n{path}\n\n{msg}")
+        open_btn = box.addButton("打开文件夹", QMessageBox.AcceptRole)
+        box.addButton("关闭", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is open_btn:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent)))
+
+    def _on_export_failed(self, reason: str) -> None:
+        self.statusBar().showMessage(f"⤓ 导出失败：{reason}", 8000)
+        QMessageBox.warning(self, "导出失败", reason)
+
     def closeEvent(self, event) -> None:
         """关闭时保存布局宽度 + 最近拖入目录 + 选中项 + A区模式到 QSettings。"""
+        # M45：关窗时如果还在导出，先让它停下（不写半截文件）
+        if self._export_worker is not None and self._export_worker.isRunning():
+            self._export_worker.requestInterruption()
+            self._export_worker.wait()
         self._settings.setValue("layout/splitter", self._splitter.sizes())
         self._settings.setValue("layout/panes", self._panes.sizes())
         if self._last_folder is not None:

@@ -178,7 +178,8 @@ MMY-FrameQuickView/
 │   │   ├── layer.py           # 同ID叠层合成（layer_order 排序、共享bbox对齐）
 │   │   ├── imageops.py        # 包围盒裁剪（并集bbox）、单帧合成 composite_layers
 │   │   ├── compose.py         # M45：叠层配方 build_stack（叠哪些层、穿戴什么；无 Qt，预览/导出共用）
-│   │   └── render.py          # M45：序列渲染 SequenceRender（一串对齐好的帧；无 Qt，预览/导出共用）
+│   │   ├── render.py          # M45：序列渲染 SequenceRender（一串对齐好的帧；无 Qt，预览/导出共用）
+│   │   └── export/            # M45：动画导出（gif.py / apng.py；ExportOptions + export_frames 总入口）
 │   └── ui/
 │       ├── drop_zone.py       # 拖拽区
 │       ├── part_list.py       # 左栏部件列表（可搜索、分类chips过滤、缺漏红点）
