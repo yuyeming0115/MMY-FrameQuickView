@@ -733,10 +733,15 @@ class MainWindow(QMainWindow):
         )
         # M38/M42：穿戴时装/头发/武器——当前显示（含形象组合）缺哪类才提供哪类的下拉；
         # 未手动指定时，weapon 槽位按武器标签（如「斧」/「剑」）自动推断默认武器
+        # M44.2：只有「模块化角色」（显示部件里有身体/头发/武器任一）才提供这三个下拉。
+        # 怪物/NPC/伙伴这类纯 ID 整包资源、单独的翅膀/坐骑/特效，穿主角的时装武器没有意义，
+        # 以前会一口气列出 5 个下拉框挤占画布（鳄鱼 503094 实测截图）。
         have = {p.part for p in display}
+        modular = self._is_modular_look(display)
         for slot in self._LOOK_SLOTS:
-            items = [] if slot in have else self._look_library(slot)
-            cur = "" if slot in have else self._effective_dressed_look(slot, grp)
+            offer = modular and slot not in have        # 是模块化角色，且自己没有这个部位
+            items = self._look_library(slot) if offer else []
+            cur = self._effective_dressed_look(slot, grp) if offer else ""
             getattr(self.anim_view, f"set_{slot}_library")(items, cur)
         # M33：切换组保持当前方向/动作（直到用户主动改变）；
         # 新组缺失该组合时由 show_group 兜底回退默认
@@ -827,6 +832,16 @@ class MainWindow(QMainWindow):
 
     # ---------------- M38：穿戴时装/头发/武器（跨 ID 形象组） ----------------
     _LOOK_SLOTS = ("body", "hair", "weapon")
+
+    def _is_modular_look(self, display: list[PartData]) -> bool:
+        """M44.2：当前显示的部件是不是「模块化角色」（拆成身体/头发/武器部件的主角类资源）。
+
+        判断方法：显示部件里只要有一个部位是 body / hair / weapon 就算。
+        - 主角时装组（body+shadow）、头发组、武器组、套装组 → True
+        - 纯 ID 整包资源（怪物/NPC/伙伴，part=None）、翅膀、坐骑、特效、世界BOSS变体 → False
+        只有 True 时才提供「穿戴时装/头发/武器」，也只有 True 时才把记忆的穿戴叠上去。
+        """
+        return any(p.part in self._LOOK_SLOTS for p in display)
     _LOOK_SLOT_CN = {"body": "时装", "hair": "头发", "weapon": "武器"}
 
     def _load_dressed_look(self, slot: str) -> dict[str, str]:
@@ -907,6 +922,10 @@ class MainWindow(QMainWindow):
         显示部件（含形象组合）已有该部位 → 跳过该槽位，不重复叠加。
         """
         if self._group is None:
+            return []
+        # M44.2：非模块化角色（如怪物）不叠任何穿戴——下拉已隐藏，用户无法脱下，
+        # 万一 QSettings 里留着旧的穿戴记忆，也不能再把它叠上去
+        if not self._is_modular_look(display):
             return []
         have = {p.part for p in display}
         out: list[PartData] = []

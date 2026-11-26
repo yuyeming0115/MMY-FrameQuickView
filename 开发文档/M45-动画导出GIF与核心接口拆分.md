@@ -341,10 +341,20 @@ def plan_export(target, scope: str, look, ctx, tpl) -> list[tuple[str, str]]:
 3. `app.py` 新增 `_current_look()`（从现有属性组装 `LookConfig`）和 `_ctx`（加载目录 / 重扫后重建）。
 4. `clipboard_util.py` 挪到 `ui/`，修正 import。
 
-**验收（逐像素对比）**：
-- 改造**前**先跑一个脚本，对真实目录 `E:\XYJProject\美术资源\动画序列帧\角色输出图` 抽样（单部件、套装、形象组合、穿戴武器、
-  特效、翅膀、worldboss、图集各至少 1 个，共约 20 个资源 × 全部组合），把每帧合成图的哈希存到 `tests/golden/m45_frames.json`。
-- 改造**后**用新接口重跑，哈希必须 100% 一致；再跑全量回归测试。
+**验收（逐像素对比）**——脚本已就绪：`scripts/golden_frames.py`（2026-11-26）
+- 改造**前**跑 `record`：对真实目录按类型抽样（单部件、同 ID 多部件、形象组合、套装、worldboss 变体、扁平特效、翅膀、坐骑、
+  自动配武器、单部件视图、手动穿戴翅膀+特效；每类默认 2 个、每个最多 10 个方向×动作组合），
+  每个组合按「画布对齐」「并集 bbox」两种模式各渲染一遍，把每帧画面指纹 + 叠层配方指纹存到 `tests/golden/m45_frames.json`。
+- 改造**后**跑 `check`：按标准答案里录过的同一批组合重渲染，指纹必须 100% 一致；再跑全量回归测试。
+- 差异分两类：「配方不同」= 叠哪些层搬错了（compose）；「画面不同」= 渲染对齐搬错了（render）。
+- 只读保证：QSettings 隔离到临时 ini；关闭匹配表「新 ID 自动登记」；不碰任何资源文件。
+- 图集资源（M40）在另一个目录，录制时用 `--root` 多加一次该目录。
+- 脚本通过 `current_recipe(win)` / `render(...)` 两个适配函数调用现有代码；重构后入口若改名，只改这两个函数。
+
+```bash
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe scripts/golden_frames.py record   # 改代码前
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe scripts/golden_frames.py check    # 改代码后
+```
 
 ### 阶段 B：最小导出
 
@@ -402,3 +412,4 @@ def plan_export(target, scope: str, look, ctx, tpl) -> list[tuple[str, str]]:
 | 日期 | 内容 |
 |------|------|
 | 2026-11-26 | 建档：模块化现状评估、compose / render / export 接口设计、GIF 导出方案、分阶段计划 |
+| 2026-11-26 | 阶段 A 第一步：新增 `scripts/golden_frames.py`（record / check 逐帧指纹比对，只读） |

@@ -175,6 +175,17 @@ def main():
                 _settle(app, win_reopen)
                 layers_npc, _fm_n, _o_n, keys_npc = win_reopen._layers_for_current()
                 assert len(layers_npc) == 1, f"纯 ID 怪物带「斧」不应误挂主角武器: {keys_npc}"
+                # M44.2：纯 ID 怪物不提供「穿戴时装/头发/武器」下拉
+                tog_n = win_reopen.anim_view._toggles
+                assert not any(c.isVisible() for c in
+                               (tog_n._body_combo, tog_n._hair_combo, tog_n._weapon_combo)), \
+                    "纯 ID 怪物不应显示穿戴时装/头发/武器下拉"
+                # M44.2：即使 QSettings 里残留了旧的穿戴记忆，也不能叠到怪物身上
+                win_reopen._dressed_weapon["503099"] = "501031001"
+                win_reopen._dressed_body["503099"] = "50122101"
+                layers_npc2, *_ = win_reopen._layers_for_current()
+                assert len(layers_npc2) == 1, "残留穿戴记忆不应叠到纯 ID 怪物上"
+                del win_reopen._dressed_weapon["503099"], win_reopen._dressed_body["503099"]
 
                 win_reopen.part_list._select_by_key("GRP:50122101")
                 _settle(app, win_reopen)
