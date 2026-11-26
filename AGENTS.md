@@ -176,7 +176,9 @@ MMY-FrameQuickView/
 │   │   ├── namemap.py         # ID-中文名映射（自动发现/登记/内联改名回写/热更新）
 │   │   ├── template.py        # 规则模板加载/保存/编辑
 │   │   ├── layer.py           # 同ID叠层合成（layer_order 排序、共享bbox对齐）
-│   │   └── imageops.py        # 包围盒裁剪（并集bbox）、帧加载
+│   │   ├── imageops.py        # 包围盒裁剪（并集bbox）、单帧合成 composite_layers
+│   │   ├── compose.py         # M45：叠层配方 build_stack（叠哪些层、穿戴什么；无 Qt，预览/导出共用）
+│   │   └── render.py          # M45：序列渲染 SequenceRender（一串对齐好的帧；无 Qt，预览/导出共用）
 │   └── ui/
 │       ├── drop_zone.py       # 拖拽区
 │       ├── part_list.py       # 左栏部件列表（可搜索、分类chips过滤、缺漏红点）

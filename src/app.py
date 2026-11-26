@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from .core.blankcheck import blank_sequences
+from .core import compose      # M45：叠层配方（叠哪些层、穿戴什么）
 from .core.cleanup import (
     CleanupItem,
     cleanup_target_parts,
@@ -750,14 +751,8 @@ class MainWindow(QMainWindow):
         self._after_matrix_change()
 
     def _toggle_key(self, p, parts: list) -> str:
-        """显隐 toggle 的 key：部件名；重名时追加 `·ID`。
-
-        M37：判重范围 = 组合后的显示部件列表（跨 ID 形象组合会把多个组的
-        shadow/body 等重名部件放进同一面板）。
-        """
-        base = p.part or p.name
-        same = [q for q in parts if (q.part or q.name) == base]
-        return base if len(same) == 1 else f"{base}·{p.res_id}"
+        """显隐 toggle 的 key：部件名；重名时追加 `·ID`。（M45：逻辑在 core/compose.py）"""
+        return compose.toggle_key(p, parts)
 
     def _toggle_label(self, p, parts: list) -> str:
         base = p.part or p.name
@@ -831,17 +826,12 @@ class MainWindow(QMainWindow):
         self._after_matrix_change()
 
     # ---------------- M38：穿戴时装/头发/武器（跨 ID 形象组） ----------------
-    _LOOK_SLOTS = ("body", "hair", "weapon")
+    _LOOK_SLOTS = compose.LOOK_SLOTS      # ("body", "hair", "weapon")，定义在 core/compose.py
 
     def _is_modular_look(self, display: list[PartData]) -> bool:
-        """M44.2：当前显示的部件是不是「模块化角色」（拆成身体/头发/武器部件的主角类资源）。
+        """M44.2：是不是「模块化角色」（有身体/头发/武器部件）。（M45：逻辑在 core/compose.py）"""
+        return compose.is_modular_look(display)
 
-        判断方法：显示部件里只要有一个部位是 body / hair / weapon 就算。
-        - 主角时装组（body+shadow）、头发组、武器组、套装组 → True
-        - 纯 ID 整包资源（怪物/NPC/伙伴，part=None）、翅膀、坐骑、特效、世界BOSS变体 → False
-        只有 True 时才提供「穿戴时装/头发/武器」，也只有 True 时才把记忆的穿戴叠上去。
-        """
-        return any(p.part in self._LOOK_SLOTS for p in display)
     _LOOK_SLOT_CN = {"body": "时装", "hair": "头发", "weapon": "武器"}
 
     def _load_dressed_look(self, slot: str) -> dict[str, str]:
@@ -859,111 +849,30 @@ class MainWindow(QMainWindow):
         self._settings.sync()
 
     def _group_by_key(self, key: str) -> IdGroup | None:
-        if self._result is None or not key:
-            return None
-        return next((g for g in self._result.groups if g.key == key), None)
+        return compose.group_by_key(key, self._compose_ctx())
 
     def _look_group_label(self, grp: IdGroup) -> str:
-        """可穿戴形象组的下拉显示名：匹配表中文名优先，无则组名/ID。"""
-        cn = None
-        if self._namemap is not None and grp.parts:
-            cn = self._namemap.lookup(grp.parts[0].name, grp.res_id)
-        return cn or grp.display_name or grp.res_id
+        """可穿戴形象组的下拉显示名。（M45：逻辑在 core/compose.py）"""
+        return compose.look_group_label(grp, self._compose_ctx())
 
     def _look_library(self, slot: str) -> list[tuple[str, str]]:
-        """M38：可穿戴的形象组列表 [(组key, 显示名)]——拥有该部位的常规组。"""
-        out: list[tuple[str, str]] = []
-        for g in self._result.groups:
-            if g.is_outfit or g.is_variant or g.is_flat:
-                continue
-            if not any(p.part == slot for p in g.parts):
-                continue
-            out.append((g.key, self._look_group_label(g)))
-        return out
+        """M38：可穿戴的形象组列表 [(组key, 显示名)]。（M45：逻辑在 core/compose.py）"""
+        return compose.look_library(slot, self._compose_ctx())
 
     def _auto_weapon_key(self, grp: IdGroup) -> str:
-        """M42：按角色名中的武器标签（如「斧」「剑」）自动推断默认 0 阶武器组 key。
-
-        仅作用于带模块化身体/头发部件（body/hair）的常规组，避免纯 ID 整包资源
-        （怪物/NPC/伙伴）、独立翅膀、坐骑等误叠加主角武器。
-        """
-        if self._result is None or self._namemap is None:
+        """M42：按名字里的武器标签自动推断默认武器。（M45：逻辑在 core/compose.py）"""
+        if self._result is None:
             return ""
-        if grp.is_outfit or grp.is_variant or grp.is_flat:
-            return ""
-        if any(p.part == "weapon" for p in grp.parts):
-            return ""
-        if not any(p.part in ("body", "hair") for p in grp.parts):
-            return ""
-        tag = extract_weapon_tag(self._look_group_label(grp))
-        if not tag:
-            return ""
-        for w_key, w_label in self._look_library("weapon"):
-            if extract_weapon_tag(w_label) == tag:
-                return w_key
-        return ""
+        return compose.auto_weapon_key(grp, self._compose_ctx())
 
     def _effective_dressed_look(self, slot: str, grp: IdGroup) -> str:
-        """M38/M42：取当前组在指定槽位实际生效的穿戴组 key（显式记忆优先，其次自动推断）。"""
-        store = getattr(self, f"_dressed_{slot}")
-        if grp.key in store:
-            val = store[grp.key]
-            # 显式脱下("") 或所选组在当前目录有效时严格遵循记忆；
-            # 若记住的旧武器 key 在当前目录已失效，则回退默认推断（不写回配置）
-            if val == "" or self._group_by_key(val) is not None:
-                return val
-        if slot == "weapon":
-            return self._auto_weapon_key(grp)
-        return ""
+        """M38/M42：某组在某槽位实际生效的穿戴组 key。（M45：逻辑在 core/compose.py）"""
+        return compose.resolve_dressed(slot, grp, self._look_for(grp), self._compose_ctx())
 
     def _dressed_look_parts(self, display: list[PartData]) -> list[PartData]:
-        """M38：当前组穿戴的时装/头发/武器组的全部渲染部件（叠层与空帧抽样共用）。
-
-        显示部件（含形象组合）已有该部位 → 跳过该槽位，不重复叠加。
-        """
-        if self._group is None:
-            return []
-        # M44.2：非模块化角色（如怪物）不叠任何穿戴——下拉已隐藏，用户无法脱下，
-        # 万一 QSettings 里留着旧的穿戴记忆，也不能再把它叠上去
-        if not self._is_modular_look(display):
-            return []
-        have = {p.part for p in display}
-        out: list[PartData] = []
-        for slot in self._LOOK_SLOTS:
-            if slot in have:
-                continue
-            look_key = self._effective_dressed_look(slot, self._group)
-            grp = self._group_by_key(look_key)
-            if grp is None:
-                continue
-            out.extend(self._render_parts(grp))
-        if out and self._tpl is not None:
-            out.sort(key=lambda p: self._tpl.layer_rank(p.part))
-        return out
-
-    def _dressed_look_entries(
-        self,
-        display: list[PartData],
-        direction: str,
-        action: str,
-    ) -> list[tuple[tuple[int, int], list[Path], bool, str]]:
-        """M38：返回穿戴形象组部件的排序条目 `(sort_key, frames, is_flat, part_key)`。
-
-        ⚠ flat_mask 必须为 False（普通层语义）：这些部件与主体出自**同一张渲染
-        画布**（如 875×875），按原始画布坐标叠加才与手上位置对齐。若走特效层
-        语义（flat=True，按层自身并集框居中），武器会被强制挪到画布中心而脱手
-        ——实测 2026-09-29（昆仑剑侠武器穿到天命时装，画布对齐开关均无法补救）。
-        """
-        out: list[tuple[tuple[int, int], list[Path], bool, str]] = []
-        for p in self._dressed_look_parts(display):
-            ad = p.action_data(direction, action)
-            if ad is None:
-                ad = next((a for col in p.matrix.values() for a in col.values()), None)
-            if ad is None or not ad.frames:
-                continue
-            rank = (0, self._tpl.layer_rank(p.part)) if self._tpl is not None else (0, 0)
-            out.append((rank, ad.frames, False, p.name))
-        return out
+        """M38：当前组穿戴的时装/头发/武器部件（空帧抽样用）。（M45：逻辑在 core/compose.py）"""
+        return compose.dressed_look_parts(self._group, display,
+                                          self._look_for(self._group), self._compose_ctx())
 
     def _on_look_dressed(self, slot: str, look_key: str) -> None:
         """M38：穿戴/脱下时装/头发/武器 → 按当前组 key 记忆并刷新。"""
@@ -1122,51 +1031,16 @@ class MainWindow(QMainWindow):
         return None
 
     def _render_parts(self, grp: IdGroup) -> list[PartData]:
-        """M36：组视图参与叠层/渲染/统计的部件。
-
-        worldboss 是独立变体（叠到本体上没有意义）→ 常规排除；
-        组内只有 worldboss（该 ID 无主体）时退化为全部渲染，否则组视图无内容。
-        """
-        core = [p for p in grp.parts if p.part != "worldboss"]
-        return core or list(grp.parts)
+        """M36：组视图参与叠层的部件（排除 worldboss 变体）。（M45：逻辑在 core/compose.py）"""
+        return compose.render_parts(grp)
 
     def _look_split(self, grp: IdGroup) -> tuple[str, str] | None:
-        """M37：组的「形象前缀 + 类型词」（匹配表中文名去尾部类型词）；无命中返回 None。"""
-        if self._namemap is None or self._tpl is None or not self._tpl.look_types:
-            return None
-        if grp.is_flat or grp.is_variant or not grp.parts:
-            return None
-        first = grp.parts[0]
-        cn = self._namemap.lookup(first.name, grp.res_id)
-        if not cn:
-            return None
-        return self._tpl.look_split(cn)
+        """M37：组的「形象前缀 + 类型词」。（M45：逻辑在 core/compose.py）"""
+        return compose.look_split(grp, self._compose_ctx())
 
     def _display_parts(self, grp: IdGroup) -> list[PartData]:
-        """M37：组视图实际显示的部件 = 本组 + 同「形象」的其他 ID 组部件。
-
-        形象配对：匹配表中文名去掉尾部类型词（模板 look_types）后前缀相同的
-        其他组（如 天命·男〔剑〕时装/发/武器）→ 跨 ID 组合出整装预览；
-        按 layer_order 排序（影子最底 → body → hair → weapon）。
-        特效/世界BOSS变体/套装组不参与；无匹配表或前缀无命中时退化为本组部件。
-        """
-        core = self._render_parts(grp)
-        split = self._look_split(grp)
-        if split is None:
-            return core
-        look_key, _word = split
-        out = list(core)
-        for g in self._result.groups:
-            if g is grp or g.is_outfit or g.is_variant or g.is_flat:
-                continue
-            s = self._look_split(g)
-            if s is not None and s[0] == look_key:
-                out.extend(self._render_parts(g))
-        if len(out) == len(core):
-            return core
-        if self._tpl is not None:
-            out.sort(key=lambda p: self._tpl.layer_rank(p.part))
-        return out
+        """M37：组视图实际显示的部件（含同形象跨 ID 组合）。（M45：逻辑在 core/compose.py）"""
+        return compose.display_parts(grp, self._compose_ctx())
 
     # ---------------- M36：空帧抽样（全透明占位图检测） ----------------
     def _sync_blank_check(self) -> None:
@@ -1263,6 +1137,42 @@ class MainWindow(QMainWindow):
                 group=self._owning_group(self._part),
             )
 
+    # ---------------- M45：叠层配方（逻辑在 core/compose.py）----------------
+    def _compose_ctx(self) -> compose.ComposeContext:
+        """把「全局资料」打包给 compose：扫描结果、模板、匹配表、特效库、翅膀库。
+
+        每次调用现打包（很便宜，只是引用），这样重扫目录、换模板、重载匹配表后
+        不会拿到旧数据。
+        """
+        return compose.ComposeContext(
+            groups=self._result.groups if self._result is not None else [],
+            tpl=self._tpl,
+            namemap=self._namemap,
+            fx_by_key=self._fx_by_key,
+            wing_by_key=self._wing_by_key,
+        )
+
+    def _look_for(self, grp: IdGroup | None) -> compose.LookConfig:
+        """把某个组的「穿搭快照」从界面状态里收集出来交给 compose。
+
+        - 时装/头发/武器：只放「真的记住过」的槽位（没记过 = 交给自动推断，见 LookConfig 说明）
+        - 翅膀/特效：记住的资源名，没有就是 ""
+        - 显示层关掉的部件、特效微调偏移（按需从 QSettings 读）
+        """
+        key = grp.key if grp is not None else ""
+        dressed: dict[str, str] = {}
+        for slot in self._LOOK_SLOTS:
+            store = getattr(self, f"_dressed_{slot}")
+            if key in store:
+                dressed[slot] = store[key]
+        return compose.LookConfig(
+            dressed_look=dressed,
+            wing=self._dressed_wings.get(key, ""),
+            fx=self._dressed_fx.get(key, ""),
+            hidden_parts=set(self._hidden_parts),
+            fx_offset_of=self._get_fx_offset,
+        )
+
     def _layers_for_current(self) -> tuple[
         list[list[Path]], list[bool], dict[int, tuple[int, int]], list[str]
     ]:
@@ -1273,142 +1183,18 @@ class MainWindow(QMainWindow):
         - fx_offsets[i] = (dx, dy) 用户微调偏移（仅特效层有值）
         - part_keys[i] = 第 i 层 key（与 layers 严格同序，偏移微调靠它定位）
 
-        M26：组模式把「穿戴」的全局特效追加为顶层 flat 层。part_keys 在此一并
-        产出，避免调用方与合成链各算一份导致顺序错位（微调会作用到错误的层）。
+        M45：具体怎么叠搬到了 core/compose.py 的 build_stack；这里只做三件事：
+        ① 读按钮矩阵当前的方向/动作 ② 收集穿搭和全局资料 ③ 调 build_stack。
+        顺带更新 self._fx_layer_indices（Ctrl+方向键微调要用）。
         """
-        layers: list[list[Path]] = []
-        flat_mask: list[bool] = []
-        fx_offsets: dict[int, tuple[int, int]] = {}
-        part_keys: list[str] = []
         direction, action = self.matrix.current()
         if not direction or not action:
-            return layers, flat_mask, fx_offsets, part_keys
-        if self._part is not None:
-            ad = self._part.action_data(direction, action)
-            if ad:
-                layers = [ad.frames]
-                flat_mask = [self._part.is_flat]
-                part_keys = [self._part.name]
-                if self._part.is_flat:
-                    fx_offsets = {0: self._get_fx_offset(self._part.name)}
-            # M28：单部件视图下，特效自身就是可微调层
-            self._fx_layer_indices = {0} if self._part.is_flat else set()
-            return layers, flat_mask, fx_offsets, part_keys
-        # 组模式：显示部件（M37：含同形象跨 ID 组合）与穿戴形象组（M38/M42）
-        # 统一按模板 layer_order 排序（全部影子最底 → body → hair → weapon → 组内特效），
-        # 避免穿戴武器的影子盖在人物身体之上
-        display = self._display_parts(self._group)
-        entries: list[tuple[tuple[int, int], list[Path], bool, str]] = []
-        for p in display:
-            key = self._toggle_key(p, display)
-            if key in self._hidden_parts:
-                continue
-            ad = p.action_data(direction, action)
-            if ad is None and p.is_flat:
-                ad = next((a for col in p.matrix.values() for a in col.values()), None)
-            if self._tpl is None:
-                rank = (1 if p.is_flat else 0, 0)
-            elif p.is_flat:
-                rank = (1, len(self._tpl.layer_order))
-            else:
-                rank = (0, self._tpl.layer_rank(p.part))
-            entries.append((rank, ad.frames if ad else [], p.is_flat, key))
-        entries.extend(self._dressed_look_entries(display, direction, action))
-        entries.sort(key=lambda e: e[0])
-
-        for idx, (_rank, frames, is_flat, key) in enumerate(entries):
-            layers.append(frames)
-            flat_mask.append(is_flat)
-            part_keys.append(key)
-            if is_flat:
-                fx_offsets[idx] = self._get_fx_offset(key)
-        # M28：记录「真正的特效层」下标（组内 flat 部件）——穿戴的翅膀虽也是
-        # flat 层，但按 (方向,动作) 取帧、对齐本就准确，不参与 Ctrl+方向键微调。
-        self._fx_layer_indices = {i for i, f in enumerate(flat_mask) if f}
-        # M28：先追加穿戴的翅膀（在角色之上）→ 再追加穿戴特效（置顶最上层）
-        self._append_dressed_wings(layers, flat_mask, fx_offsets, part_keys)
-        idx = self._append_dressed_fx(layers, flat_mask, fx_offsets, part_keys)
-        if idx is not None:
-            self._fx_layer_indices.add(idx)   # 穿戴的特效可微调
-        return layers, flat_mask, fx_offsets, part_keys
-
-    def _append_dressed_fx(
-        self,
-        layers: list[list[Path]],
-        flat_mask: list[bool],
-        fx_offsets: dict[int, tuple[int, int]],
-        part_keys: list[str],
-    ) -> int | None:
-        """M26：把当前套装「穿戴」的特效追加为顶层 flat 层（原地修改传入列表）。"""
-        if self._group is None:
-            return None
-        return self._append_dressed_part(
-            layers, flat_mask, fx_offsets, part_keys,
-            self._dressed_fx.get(self._group.key, ""), self._fx_by_key,
-        )
-
-    def _append_dressed_wings(
-        self,
-        layers: list[list[Path]],
-        flat_mask: list[bool],
-        fx_offsets: dict[int, tuple[int, int]],
-        part_keys: list[str],
-    ) -> int | None:
-        """M28：把当前套装「穿戴」的翅膀追加为顶层 flat 层（原地修改传入列表）。
-
-        与特效同机制，但翅膀是**常规资源**（有方向/动作层级）→ 按当前
-        (方向,动作) 取帧，因此方向动作天然对齐，**不提供偏移微调**。
-        """
-        if self._group is None:
-            return None
-        return self._append_dressed_part(
-            layers, flat_mask, fx_offsets, part_keys,
-            self._dressed_wings.get(self._group.key, ""), self._wing_by_key,
-        )
-
-    def _append_dressed_part(
-        self,
-        layers: list[list[Path]],
-        flat_mask: list[bool],
-        fx_offsets: dict[int, tuple[int, int]],
-        part_keys: list[str],
-        dress_key: str,
-        by_key: dict[str, PartData],
-    ) -> int | None:
-        """M26/M28：把「穿戴」的全局资源追加为顶层 flat 层（原地修改传入列表）。
-
-        - key 取自 dressed 映射[套装key]；为空或找不到 → 不追加
-        - 该资源若已在本组内（旧目录结构自动并入）→ 跳过，避免重复叠加
-        - **取帧方式**：flat 资源（特效）取自身序列；常规资源（翅膀）按当前
-          (方向,动作) 取帧，缺失时退回该资源的第一个可用组合
-        - 仅 flat 资源（如特效）设置 flat_mask=True 并应用 fx_offsets 居中微调；
-          常规穿戴资源（如翅膀）保持 flat_mask=False 按原始画布对齐
-        - 偏移按**资源名**存取 → 同一资源调一次偏移，所有套装复用
-        - 返回追加到的层下标（未追加返回 None），供调用方标记可微调的特效层
-        """
-        if not dress_key:
-            return None
-        p = by_key.get(dress_key)
-        if p is None:
-            return None
-        if any(q.name == p.name for q in self._group.parts):
-            return None                      # 已在组内，不重复叠加
-        direction, action = self.matrix.current()
-        if p.is_flat:
-            ad = next((a for col in p.matrix.values() for a in col.values()), None)
-        else:
-            ad = p.action_data(direction, action)
-            if ad is None:
-                ad = next((a for col in p.matrix.values() for a in col.values()), None)
-        if ad is None or not ad.frames:
-            return None
-        idx = len(layers)
-        layers.append(ad.frames)
-        flat_mask.append(p.is_flat)
-        part_keys.append(p.name)
-        if p.is_flat:
-            fx_offsets[idx] = self._get_fx_offset(p.name)
-        return idx
+            return [], [], {}, []
+        target = self._part if self._part is not None else self._group
+        stack = compose.build_stack(target, direction, action,
+                                    self._look_for(self._group), self._compose_ctx())
+        self._fx_layer_indices = stack.fx_layer_indices
+        return stack.as_tuple()
 
     def _load_dressed_fx(self) -> dict[str, str]:
         """M26：从 QSettings 读取各套装的穿戴特效选择 {套装key: 特效key}。"""
