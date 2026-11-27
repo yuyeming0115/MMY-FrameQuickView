@@ -9,8 +9,9 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
-from ..core.compose import LayerStack
+from ..core.compose import ComposeContext, LayerStack, LookConfig
 from ..core.export import ExportOptions, export_frames
+from ..core.export.batch import run_batch
 from ..core.render import SequenceRender
 
 
@@ -44,4 +45,34 @@ class ExportWorker(QThread):
         except OSError as e:                             # 磁盘相关：没权限、路径太长、被占用…
             self.failed.emit(f"写文件失败：{e}")
         except Exception as e:                           # 其他意外：带上类型名，方便排查
+            self.failed.emit(f"{type(e).__name__}: {e}")
+
+
+class BatchExportWorker(QThread):
+    """批量导出（M45 阶段 C）：整个角色 / 当前方向全部动作 / 展示合集。
+
+    真正的循环在 core/export/batch.py 的 run_batch 里（不依赖 Qt）；
+    这里只把「进度」和「要不要停」两个回调接到 Qt 信号 / QThread 上。
+    """
+    progress = Signal(int, int, str)     # (已完成, 总数, 正在处理的名称) —— 给进度条用
+    report_ready = Signal(object)        # 导出结束（含用户中途取消）：BatchReport
+    failed = Signal(str)                 # 没跑起来就出错了（正常的单项失败记在报告里，不走这里）
+
+    def __init__(self, target, items: list, look: LookConfig, ctx: ComposeContext,
+                 opts: ExportOptions, out_dir: Path, name: str, canvas_align: bool,
+                 showcase: bool, parent=None):
+        super().__init__(parent)
+        self._args = dict(target=target, items=items, look=look, ctx=ctx, opts=opts,
+                          out_dir=Path(out_dir), name=name, canvas_align=canvas_align,
+                          showcase=showcase)
+
+    def run(self) -> None:
+        try:
+            report = run_batch(
+                **self._args,
+                progress=lambda done, total, label: self.progress.emit(done, total, label),
+                should_stop=self.isInterruptionRequested,   # 点了「取消」或关窗时，在下一项开始前停下
+            )
+            self.report_ready.emit(report)
+        except Exception as e:
             self.failed.emit(f"{type(e).__name__}: {e}")

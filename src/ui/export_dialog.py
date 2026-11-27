@@ -1,4 +1,4 @@
-"""导出弹窗（M45 阶段 B）：选择格式、背景、帧率、尺寸、输出目录。
+"""导出弹窗（M45 阶段 B/C）：选择导出范围、格式、背景、帧率、尺寸、输出目录。
 
 弹窗只负责「让用户选」，选完用 options() / output_dir() 取结果；真正的导出在 ExportWorker 里。
 格式、背景、循环、裁剪、放大这些选择会记住（QSettings 的 export/*），下次打开沿用；
@@ -23,7 +23,9 @@ _WARN = "color: #E8A33D;"
 
 class ExportDialog(QDialog):
     def __init__(self, parent, *, name: str, subtitle: str, layers: str, fps: int,
-                 default_dir: Path, rel_path: str, settings: QSettings):
+                 default_dir: Path, rel_path: str, settings: QSettings,
+                 scopes: dict | None = None, scope: str = "current",
+                 direction: str = "", action: str = ""):
         """
         name        资源名（弹窗标题），如「503122 · 宝箱怪」
         subtitle    当前方向/动作/帧数，如「SE · idle · 8 帧」
@@ -31,12 +33,18 @@ class ExportDialog(QDialog):
         fps         默认帧率（预览当前的 FPS）
         default_dir 默认输出目录
         rel_path    输出目录下的相对路径（不含扩展名），如「503122_宝箱怪/SE_idle」
+        scopes      各导出范围能导出几个：{"direction": 当前方向有几个动作, "all": 整个角色有几个组合}
+                    不传 = 只能导出当前动画（兼容阶段 B 的用法）
+        scope       默认选中哪个范围："current" / "direction" / "all" / "showcase"
+        direction / action   当前的方向和动作（范围选项的文字里要写）
         """
         super().__init__(parent)
         self.setWindowTitle("导出动画")
         self.setMinimumWidth(520)
         self._settings = settings
         self._rel_path = rel_path
+        self._folder = rel_path.split("/")[0]            # 批量导出时的资源文件夹名
+        self._scopes = scopes or {}
 
         lay = QVBoxLayout(self)
         lay.setSpacing(10)
@@ -57,10 +65,35 @@ class ExportDialog(QDialog):
         form = QFormLayout()
         form.setSpacing(8)
 
+        # ---- 导出范围（阶段 C）----
+        # 四个单选互斥。某个范围没有内容可导（如只有 1 个动作时「当前方向全部动作」没有意义）就灰掉。
+        n_dir = int(self._scopes.get("direction", 0))
+        n_all = int(self._scopes.get("all", 0))
+        self._scope_radios: dict[str, QRadioButton] = {}
+        scope_box = QVBoxLayout()
+        scope_box.setSpacing(4)
+        scope_group = QButtonGroup(self)
+        for key, text, enabled in (
+            ("current", f"当前动画（{direction} · {action}）", True),
+            ("direction", f"当前方向全部动作（{direction}，{n_dir} 个文件）", n_dir > 1),
+            ("all", f"整个角色（全部方向×动作，{n_all} 个文件）", n_all > 1),
+            ("showcase", f"展示合集（{direction} 的 {n_dir} 个动作串成 1 个文件）", n_dir > 1),
+        ):
+            rb = QRadioButton(text)
+            rb.setEnabled(enabled)
+            scope_group.addButton(rb)
+            scope_box.addWidget(rb)
+            self._scope_radios[key] = rb
+        if len(self._scopes) > 0:                       # 传了范围信息才显示这一行
+            form.addRow("范围", _wrap(scope_box))
+        first = self._scope_radios.get(scope)
+        (first if first is not None and first.isEnabled() else self._scope_radios["current"]).setChecked(True)
+
         # ---- 格式 ----
         self.fmt = QComboBox()
         self.fmt.addItem("GIF（兼容性最好，聊天软件/文档都能播）", "gif")
         self.fmt.addItem("APNG（保留半透明，体积较大）", "apng")
+        self.fmt.addItem("WebP（无损、保留半透明、体积最小；部分老软件不能播）", "webp")
         form.addRow("格式", self.fmt)
 
         # ---- 背景 ----
@@ -135,6 +168,8 @@ class ExportDialog(QDialog):
 
         self._restore()
         # 任何选项变了都刷新提示文字
+        for rb in self._scope_radios.values():
+            rb.toggled.connect(self._refresh)
         for w in (self.fmt, self.bg, self.scale):
             w.currentIndexChanged.connect(self._refresh)
         self.fps.valueChanged.connect(self._refresh)
@@ -179,7 +214,14 @@ class ExportDialog(QDialog):
         else:
             self.fps_note.setText("")
         self.pad.setEnabled(self.crop.isChecked())
-        self.path_note.setText(f"将保存为：{self.output_path()}")
+        scope = self.scope()
+        if scope == "current":
+            self.path_note.setText(f"将保存为：{self.output_path()}")
+        else:                                           # 批量：写到「输出目录/资源名/」文件夹里
+            n = {"direction": self._scopes.get("direction", 0), "all": self._scopes.get("all", 0),
+                 "showcase": 1}[scope]
+            self.path_note.setText(f"将保存到文件夹：{self.output_dir() / self._folder}\n"
+                                   f"共 {n} 个文件（空帧占位图会自动跳过并在完成后列出）")
 
     def _browse(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "选择导出目录", self.dir_edit.text())
@@ -204,6 +246,13 @@ class ExportDialog(QDialog):
             crop_padding=self.pad.value() if self.crop.isChecked() else None,
             scale=int(self.scale.currentData()),
         )
+
+    def scope(self) -> str:
+        """选中的导出范围："current" / "direction" / "all" / "showcase"。"""
+        for key, rb in self._scope_radios.items():
+            if rb.isChecked():
+                return key
+        return "current"
 
     def output_dir(self) -> Path:
         return Path(self.dir_edit.text().strip())

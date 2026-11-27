@@ -93,6 +93,10 @@ def main() -> int:
     # 清理 QSettings
     w._settings.remove('last_map_file')
     w._settings.sync()
+    # 停掉后台解码/空帧抽样线程再退出：否则程序退出时线程可能还在跑，
+    # Qt 报「QThread: Destroyed while thread is still running」并崩溃，退出码变成非 0
+    #（不用 w.close()：closeEvent 会把布局等写进注册表里的真实设置）
+    w._stop_all_workers_and_caches()
     print('\n[OK] cleanup done')
     return 0
 

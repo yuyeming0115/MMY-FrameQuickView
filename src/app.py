@@ -8,12 +8,13 @@ from PySide6.QtCore import QEvent, QFileSystemWatcher, QSettings, Qt, QTimer, QT
 from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-    QMessageBox, QPushButton, QSplitter, QVBoxLayout, QWidget,
+    QMessageBox, QProgressDialog, QPushButton, QSplitter, QVBoxLayout, QWidget,
 )
 
 from .core.blankcheck import blank_sequences
 from .core import compose      # M45：叠层配方（叠哪些层、穿戴什么）
 from .core.export import default_output_dir, is_inside, safe_name   # M45：动画导出
+from .core.export.batch import plan_combos, planned_paths             # M45：批量导出计划
 from .core.cleanup import (
     CleanupItem,
     cleanup_target_parts,
@@ -30,7 +31,7 @@ from .ui.button_matrix import ButtonMatrix
 from .ui.cleanup_dialog import CleanupConfirmDialog
 from .ui.drop_zone import DropZone
 from .ui.export_dialog import ExportDialog      # M45：导出弹窗
-from .ui.export_worker import ExportWorker      # M45：导出后台线程
+from .ui.export_worker import BatchExportWorker, ExportWorker      # M45：导出后台线程
 from .ui.grid_view import GridView
 from .ui.part_list import PartList
 from .ui.template_editor import TemplateEditorDialog
@@ -129,7 +130,8 @@ class MainWindow(QMainWindow):
         self._dressed_weapon: dict[str, str] = self._load_dressed_look("weapon")
         # M28：真正的特效层下标（穿戴的翅膀也算 flat 层，但不需要微调 → 排除）
         self._fx_layer_indices: set[int] = set()
-        self._export_worker: ExportWorker | None = None   # M45：正在进行的导出（同一时间只做一个）
+        self._export_worker: ExportWorker | BatchExportWorker | None = None   # M45：正在进行的导出（同一时间只做一个）
+        self._export_progress: QProgressDialog | None = None                 # M45：批量导出的进度条
         # fills 警告检测开关（M37 起默认关：BOSS/主角等无 fills 部件的资源满屏 🟠 降噪；
         # QSettings 记忆，用户开过则保持其选择）
         self._fills_check = bool(self._settings.value("checks/fills", False, type=bool))
@@ -254,6 +256,7 @@ class MainWindow(QMainWindow):
         # 「📖 选择匹配表」按钮 → 打开文件选择，选完自动刷新左栏中文名
         self.part_list.pick_namemap.connect(self._pick_map_file)
         self.part_list.clean_extra_requested.connect(self._on_part_list_clean_extra_requested)
+        self.part_list.export_requested.connect(self._on_part_list_export_requested)   # M45
         splitter.addWidget(self.part_list)
 
         right = QWidget()
@@ -1585,8 +1588,32 @@ class MainWindow(QMainWindow):
         return {"target": target, "direction": direction, "action": action,
                 "stack": stack, "frames": n, "name": self._export_name(target)}
 
-    def _on_export_requested(self) -> None:
-        """点「⤓ 导出」或按 Ctrl+E：弹出导出弹窗 → 检查输出位置 → 后台导出。"""
+    def _look_snapshot(self, grp) -> compose.LookConfig:
+        """给「后台线程」用的穿搭快照。
+
+        平时 LookConfig 里的特效偏移是「用到哪个才去 QSettings 读」。批量导出在后台线程里跑，
+        不能在线程里读界面线程的 QSettings，所以这里先在主线程把所有特效的偏移一次读好，
+        后台线程只查这个字典。
+        """
+        look = self._look_for(grp)
+        names = set(self._fx_by_key)
+        if self._result is not None:
+            names |= {p.name for p in self._result.parts if p.is_flat}
+        offsets = {n: self._get_fx_offset(n) for n in names}
+        look.fx_offset_of = lambda key, _o=offsets: _o.get(key, (0, 0))
+        return look
+
+    def _on_part_list_export_requested(self, key: str) -> None:
+        """左栏右键「⤓ 导出该资源全部动画」：先选中这一项（刷新叠层和方向动作），再按「整个角色」导出。"""
+        if self.part_list.current_key() != key:
+            self.part_list._select_by_key(key)
+        self._on_export_requested("all")
+
+    def _on_export_requested(self, scope: str = "current") -> None:
+        """点「⤓ 导出」或按 Ctrl+E：弹出导出弹窗 → 检查输出位置 → 后台导出。
+
+        scope 是弹窗默认选中的范围："current"（当前动画）/ "all"（整个角色，左栏右键用）。
+        """
         if self._export_worker is not None and self._export_worker.isRunning():
             self.statusBar().showMessage("⤓ 上一个导出还没完成，请稍等", 4000)
             return
@@ -1595,6 +1622,10 @@ class MainWindow(QMainWindow):
             return
         root = self._last_folder or (self._result.root if self._result else Path.home())
         d, a = job["direction"], job["action"]
+        # 各范围能导出几个（弹窗里显示、灰掉没意义的选项）：和预览用同一份「有哪些方向×动作」
+        ctx, look = self._compose_ctx(), self._look_snapshot(self._group)
+        all_items = plan_combos(job["target"], look, ctx)
+        dir_items = [c for c in all_items if c[0] == d]
         dlg = ExportDialog(
             self,
             name=job["name"].replace("_", " · ", 1),
@@ -1604,10 +1635,16 @@ class MainWindow(QMainWindow):
             default_dir=default_output_dir(Path(root)),
             rel_path=f"{safe_name(job['name'])}/{safe_name(f'{d}_{a}')}",
             settings=self._settings,
+            scopes={"direction": len(dir_items), "all": len(all_items)},
+            scope=scope, direction=d, action=a,
         )
         if dlg.exec() != QDialog.Accepted:
             return
         opts = dlg.options()
+        if dlg.scope() != "current":
+            self._start_batch_export(job, dlg.scope(), all_items, dir_items, look, ctx, opts,
+                                     dlg.output_dir(), Path(root))
+            return
         out_path = dlg.output_path()
         # 输出到扫描目录里面：会触发自动刷新重扫（M24），APNG 还可能被当成资源扫进来
         if is_inside(out_path.parent, Path(root)):
@@ -1650,12 +1687,112 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"⤓ 导出失败：{reason}", 8000)
         QMessageBox.warning(self, "导出失败", reason)
 
+    # ---------------- M45 阶段 C：批量导出 ----------------
+    def _start_batch_export(self, job: dict, scope: str, all_items: list, dir_items: list,
+                            look: compose.LookConfig, ctx: compose.ComposeContext, opts,
+                            out_dir: Path, root: Path) -> None:
+        """批量导出：检查输出位置 / 已存在的文件 → 后台逐个导出 → 进度条 → 完成报告。"""
+        showcase = scope == "showcase"
+        items = all_items if scope == "all" else dir_items
+        if not items:
+            self.statusBar().showMessage("⤓ 导出：没有可导出的方向×动作", 4000)
+            return
+        name = job["name"]
+        # 输出到扫描目录里面：会触发自动刷新重扫（M24），导出的文件还可能被当成资源扫进来
+        if is_inside(out_dir, root):
+            ans = QMessageBox.question(
+                self, "导出动画",
+                f"输出位置在正在浏览的资源目录里面：\n{out_dir}\n\n"
+                "导出期间会反复触发自动刷新，导出的文件也可能被当成资源扫进来。\n仍要导出到这里吗？")
+            if ans != QMessageBox.Yes:
+                return
+        exist = [p for p in planned_paths(items, out_dir, name, opts.ext, showcase) if p.exists()]
+        if exist:
+            ans = QMessageBox.question(
+                self, "导出动画",
+                f"有 {len(exist)} 个文件已存在，例如：\n{exist[0]}\n\n覆盖这些文件吗？")
+            if ans != QMessageBox.Yes:
+                return
+        # 「按内容裁剪」时一律按原始画布渲染再裁（同单个导出）
+        canvas_align = True if opts.crop_padding is not None else self._canvas_align
+
+        worker = BatchExportWorker(job["target"], items, look, ctx, opts, out_dir, name,
+                                   canvas_align, showcase, self)
+        self._export_worker = worker
+        # 进度条：可取消。取消 = 请求线程在「下一项开始前」停下，已写好的文件保留
+        n = 1 if showcase else len(items)
+        progress = QProgressDialog("准备导出…", "取消", 0, len(items), self)
+        progress.setWindowTitle("导出动画")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.canceled.connect(worker.requestInterruption)
+        self._export_progress = progress
+        worker.progress.connect(self._on_batch_progress)
+        worker.report_ready.connect(self._on_batch_done)
+        worker.failed.connect(self._on_batch_failed)
+        self.statusBar().showMessage(f"⤓ 正在批量导出 {name}（{n} 个文件）…")
+        progress.show()
+        worker.start()
+
+    def _on_batch_progress(self, done: int, total: int, label: str) -> None:
+        dlg = self._export_progress
+        # 用户点了「取消」后不再更新（否则 setValue 可能把已关掉的进度条又弹出来）
+        if dlg is None or dlg.wasCanceled():
+            return
+        # ⚠ 顺序很重要：先改文字，最后才 setValue。
+        # 模态进度条的 setValue 内部会顺手处理排队中的事件，导出恰好在这时结束的话，
+        # 「导出完成」会先被处理 → 进度条被关掉、self._export_progress 变成 None，
+        # 之后再改文字就会报 AttributeError（Codex 跑测试时实际出现过）。
+        dlg.setLabelText(f"正在导出（{min(done + 1, total)} / {total}）：{label}")
+        dlg.setMaximum(max(1, total))
+        dlg.setValue(min(done, total))
+
+    def _close_batch_progress(self) -> None:
+        if self._export_progress is not None:
+            try:
+                self._export_progress.canceled.disconnect()  # 先断开：close() 会误触发「取消」
+            except RuntimeError:                             # 已经没有连接（比如取消时已断开）
+                pass
+            self._export_progress.close()
+            self._export_progress.deleteLater()
+            self._export_progress = None
+
+    def _on_batch_done(self, rep) -> None:
+        """批量导出结束（完成或中途取消）：弹出报告——成功/跳过/失败各几个，明细和「打开文件夹」。"""
+        self._close_batch_progress()
+        self.statusBar().showMessage(f"⤓ 批量导出：{rep.summary()}", 10000)
+        box = QMessageBox(self)
+        box.setWindowTitle("导出完成" if not rep.cancelled else "导出已取消")
+        box.setIcon(QMessageBox.Warning if rep.failed else QMessageBox.Information)
+        box.setText(f"{rep.summary()}\n\n输出文件夹：\n{rep.folder}")
+        if rep.skipped or rep.failed:
+            box.setDetailedText(rep.details())               # 点「显示详细信息」展开，不占屏幕
+        open_btn = box.addButton("打开文件夹", QMessageBox.AcceptRole)
+        box.addButton("关闭", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is open_btn and rep.folder is not None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(rep.folder)))
+
+    def _on_batch_failed(self, reason: str) -> None:
+        self._close_batch_progress()
+        self._on_export_failed(reason)
+
     def closeEvent(self, event) -> None:
         """关闭时保存布局宽度 + 最近拖入目录 + 选中项 + A区模式到 QSettings。"""
         # M45：关窗时如果还在导出，先让它停下（不写半截文件）
         if self._export_worker is not None and self._export_worker.isRunning():
             self._export_worker.requestInterruption()
             self._export_worker.wait()
+        # M45 修复：关窗时停掉 A/B 区解码线程和空帧抽样线程。
+        # 以前不停：如果关窗那一刻还在解码（大序列、刚切换资源），程序退出时线程还在跑，
+        # Qt 会报「QThread: Destroyed while thread is still running」并强制崩溃退出。
+        # 先「请它停」（解码循环每帧都会检查，能尽快结束），再等它真正结束。
+        for w in (self.grid_view._worker, self.anim_view._worker):
+            if w is not None and w.isRunning():
+                w.requestInterruption()
+        self._stop_all_workers_and_caches()
         self._settings.setValue("layout/splitter", self._splitter.sizes())
         self._settings.setValue("layout/panes", self._panes.sizes())
         if self._last_folder is not None:

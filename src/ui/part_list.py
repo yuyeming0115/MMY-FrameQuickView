@@ -46,6 +46,7 @@ class PartList(QFrame):
     group_selected = Signal(str)    # 组 key（点击组头时触发：ID 组=res_id，套装组=父文件夹路径）
     pick_namemap = Signal()         # 点击「📖 选择匹配表」按钮时触发，app 打开文件选择
     clean_extra_requested = Signal(str)  # M43：左栏右键清理多余动作（传树项 key）
+    export_requested = Signal(str)       # M45：左栏右键「导出该资源全部动画」（传树项 key）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -525,6 +526,11 @@ class PartList(QFrame):
         if folder_path:
             menu.addSeparator()
             menu.addAction("复制文件夹路径", lambda: self._copy_text(folder_path))
+
+        # M45：导出该资源的全部动画（弹出导出弹窗，默认选「整个角色」）
+        menu.addSeparator()
+        menu.addAction("⤓ 导出该资源全部动画…",
+                       lambda _=False, k=key: self.export_requested.emit(k))
 
         if self._tpl is not None:
             extra_items = []

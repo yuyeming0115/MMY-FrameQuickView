@@ -12,8 +12,8 @@
 - **同 ID 部件叠层**：同 ID 多部件（shadow / body / hair / weapon…）按模板层序叠合预览，
   支持套装整装、穿戴特效/翅膀，逐层显隐开关
 - **画布 3x3 显向热区**：画布内点击/拖拽切换方向；金色 = 当前方向，米白 = 鼠标指向
-- **动画导出（M45）**：当前动画一键导出 GIF / APNG（⤓ 导出 / Ctrl+E），叠层、穿戴与预览完全一致，
-  可选背景、帧率、按内容裁剪、放大倍数
+- **动画导出（M45）**：一键导出 GIF / APNG / WebP（⤓ 导出 / Ctrl+E / 左栏右键），叠层、穿戴与预览完全一致；
+  可导出当前动画、当前方向全部动作、整个角色、展示合集，批量导出带进度条与完成报告
 - **中文名匹配表**：`*匹配表*.txt` 自动发现，新 ID 自动登记，F2 内联改名热回写
 
 ## 环境搭建
@@ -57,6 +57,10 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe tests/test_m8_layout.py
 # 全量回归
 for f in tests/test_*.py; do echo "== $f"; QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe "$f"; done
 ```
+
+**一键验证（推荐）**：`bash scripts/verify.sh`（关键测试，约 1~2 分钟）；
+`bash scripts/verify.sh full` = 全部测试 + 逐帧画面标准答案比对（改了渲染/叠层代码后用）；
+`bash scripts/verify.sh golden` = 只做画面比对。跑完只显示通过/失败汇总，失败项自动列出原因。
 
 > PowerShell 设置环境变量用 `$env:QT_QPA_PLATFORM='offscreen'`。
 > 个别测试依赖本机真实资源路径（如 `E:\Temp\...`），无数据时相应环节只打印不校验。

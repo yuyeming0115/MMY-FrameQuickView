@@ -1,0 +1,2 @@
+# bash 脚本必须用 LF 换行：Windows 默认会把换行转成 CRLF，bash 读到多余的 \r 会报错
+*.sh text eol=lf

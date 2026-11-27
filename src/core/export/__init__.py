@@ -5,7 +5,7 @@
     ② core/render.py    SequenceRender    → 一串对齐好的 PIL 图片
     ③ 本模块            export_frames()   → 裁剪 / 放大 / 铺背景 / 编码成文件
 
-以后要加新格式（WebP、PNG 序列、精灵图…）：在本目录新建一个文件写 write_xxx()，
+以后要加新格式（PNG 序列、精灵图…）：在本目录新建一个文件写 write_xxx()，
 再在 export_frames() 里加一行分发即可，界面代码不用动。
 
 用法示例：
@@ -23,13 +23,13 @@ from pathlib import Path
 from PIL import Image
 
 # 支持的格式：内部代号 → 文件扩展名
-FORMATS = {"gif": "gif", "apng": "png"}
+FORMATS = {"gif": "gif", "apng": "png", "webp": "webp"}
 
 
 @dataclass
 class ExportOptions:
     """导出选项：导出弹窗里的每一项都对应这里一个字段。"""
-    fmt: str = "gif"                    # "gif" / "apng"
+    fmt: str = "gif"                    # "gif" / "apng" / "webp"
     fps: int = 12                       # 目标帧率（GIF 会按 10 毫秒取整，见 frame_ms）
     loop: bool = True                   # True = 无限循环；False = 只播放一次
     background: str | None = "#1E2023"  # 背景色（十六进制）；None = 透明
@@ -154,9 +154,12 @@ def export_frames(frames: list[Image.Image], out_path: Path, opts: ExportOptions
     if opts.fmt == "gif":
         from .gif import write_gif
         write_gif(frames, out_path, opts)
-    else:
+    elif opts.fmt == "apng":
         from .apng import write_apng
         write_apng(frames, out_path, opts)
+    else:
+        from .webp import write_webp
+        write_webp(frames, out_path, opts)
     return {
         "frames": len(frames),
         "size": frames[0].size,
