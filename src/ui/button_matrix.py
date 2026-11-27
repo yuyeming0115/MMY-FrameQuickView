@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QSizePolicy, QVBoxLayout
+from PySide6.QtWidgets import QBoxLayout, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QSizePolicy, QVBoxLayout
 
 from ..core.cleanup import (
     action_disk_paths,
@@ -279,6 +279,19 @@ class ButtonMatrix(QFrame):
         # M36：当前选中项的空序列集合 {(direction, action)}（app 后台抽样后回填，
         # show_part/show_group 重建角标时读取）
         self._blank_seqs: set[tuple[str, str]] = set()
+
+    def set_horizontal(self, horizontal: bool) -> None:
+        """M44 阶段 2a：方向列和动作列「左右并排」还是「上下堆叠」。
+
+        放在右栏检查器里时用左右并排：右栏比原来的按钮列宽（约 280px），并排能省一半高度。
+        并排时两列都靠上对齐（否则按钮少的那一列会被拉到中间）。
+        """
+        lay = self.layout()
+        lay.setDirection(QBoxLayout.LeftToRight if horizontal else QBoxLayout.TopToBottom)
+        align = Qt.AlignTop if horizontal else Qt.AlignmentFlag(0)
+        for stack in (self.dir_stack, self.act_stack):
+            lay.setAlignment(stack, align)
+            lay.setStretchFactor(stack, 1 if horizontal else 0)   # 并排时两列平分宽度
 
     def set_blank(self, blank: set[tuple[str, str]]) -> None:
         """M36：设置当前选中项的空序列集合（配合 app 重新刷新矩阵生效）。"""

@@ -34,9 +34,8 @@ def main() -> int:
     print(f'[2] matrix_container width = {mxc.width()} (期望 96)')
     print(f'[2] matrix width = {w.matrix.width()} (期望 90)')
 
-    # 验证 B 区内部动画 + button matrix 都在（M8 起走 _matrix_scroll 而非 _matrix_container.layout）
-    bv = w.anim_view
-    matrix_widget = bv._matrix_scroll.widget()
+    # 验证 button matrix 在（M44.2a 起按钮矩阵移到右栏检查器，直接取 w.matrix）
+    matrix_widget = w.matrix
     print(f'[2] dir_stack buttons = {len(matrix_widget.dir_stack._buttons)}')
     print(f'[2] act_stack buttons = {len(matrix_widget.act_stack._buttons)}')
 

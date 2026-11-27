@@ -119,6 +119,8 @@ def main():
             # 稳定排序：本体组影子在前，同形象组按组序（501031001 → 501111101）追加
             assert labels == ["身体影子", "武器影子", "身体", "头发", "武器"], f"chips 文案: {labels}"
             assert "👤 形象组合 +3 部件" in win.statusBar().currentMessage()
+            # M44.2a：有形象组合时不应再写「单部件」（实际显示 5 个部件）
+            assert "单部件" not in win.statusBar().currentMessage(), win.statusBar().currentMessage()
             layers, _fm, _off, _keys = win._layers_for_current()
             assert len(layers) == 5 and all(len(l) == 8 for l in layers), \
                 f"A/B 区应 5 层×8帧: {[len(l) for l in layers]}"

@@ -1,7 +1,9 @@
 """主窗口：拖拽 → 扫描 → 左栏分组列表 + 按钮矩阵 + A/B 双区。"""
 from __future__ import annotations
 
+import atexit
 import os
+import weakref
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QFileSystemWatcher, QSettings, Qt, QTimer, QThread, QUrl, Signal
@@ -33,6 +35,7 @@ from .ui.drop_zone import DropZone
 from .ui.export_dialog import ExportDialog      # M45：导出弹窗
 from .ui.export_worker import BatchExportWorker, ExportWorker      # M45：导出后台线程
 from .ui.grid_view import GridView
+from .ui.inspector import INSPECTOR_DEFAULT_WIDTH, Inspector   # M44.2a：右栏检查器
 from .ui.part_list import PartList
 from .ui.template_editor import TemplateEditorDialog
 
@@ -154,6 +157,22 @@ class MainWindow(QMainWindow):
             self._last_folder = Path(saved_folder)
 
         self._build_ui()
+        # M44.2a 兜底：程序退出时一定停掉所有后台线程。
+        # closeEvent 里已经会停，但如果窗口没被 close()（很多测试脚本、或程序被直接结束），
+        # Python 退出时线程还在跑，Qt 会报「QThread: Destroyed while thread is still running」
+        # 并强制崩溃（测试断言全过却显示失败，偶发）。atexit 会在 Python 退出前执行。
+        # 用 weakref（弱引用）：只是「记得」这个窗口，不会因此让窗口一直占着内存不释放。
+        _ref = weakref.ref(self)
+
+        def _stop_on_exit() -> None:
+            win = _ref()
+            if win is None:
+                return                      # 窗口早已被释放，没什么要停的
+            try:
+                win._shutdown_workers()
+            except Exception:               # 退出阶段 Qt 对象可能已被销毁，忽略即可
+                pass
+        atexit.register(_stop_on_exit)
         self._load_quick_folders()                          # M30：恢复快捷文件夹 chips
         self.part_list.set_fills_check(self._fills_check)   # 启动时同步左栏橙点开关
         self.part_list.set_template(self._tpl)              # 分类 chips 顺序来源
@@ -167,6 +186,7 @@ class MainWindow(QMainWindow):
         # 恢复显示层面板开关（M36.2，默认开）
         self.anim_view.set_layer_panel_visible(
             bool(self._settings.value("display/layer_panel", True, type=bool)))
+        self._layer_section.set_expanded(self.anim_view._layer_btn.isChecked())   # M44.2a
         # 恢复 A区「原图/自适应」模式
         # M44.1 修复：Windows 注册表把布尔值存成字符串 "true"/"false"，
         # 旧写法 bool("false") 结果是 True → 只要保存过一次，重启后总是自适应。
@@ -295,8 +315,27 @@ class MainWindow(QMainWindow):
         self.anim_view.export_requested.connect(self._on_export_requested)
         panes.addWidget(self.grid_view)
         panes.addWidget(self.anim_view)
+
+        # M44 阶段 2a：右栏检查器——方向/动作按钮 + 显示层/穿戴，从 B 区里搬出来放最右边一列，
+        # B 区画布只放动画本身（不再被按钮列和显示层面板挡住）
+        self.inspector = Inspector()
+        matrix_w, toggles, placeholder = self.anim_view.dock_side_panels()
+        self.matrix.set_horizontal(True)              # 右栏够宽：方向列、动作列左右并排
+        self._matrix_section = self.inspector.add_section("方向 × 动作", matrix_w)
+        self._layer_section = self.inspector.add_section("显示层 / 穿戴", toggles, placeholder)
+        # 折叠「方向 × 动作」区块：只记住状态（下次打开沿用）
+        self._matrix_section.set_expanded(
+            bool(self._settings.value("inspector/matrix_open", True, type=bool)))
+        self._matrix_section.toggled.connect(self._on_matrix_section_toggled)
+        # 折叠「显示层 / 穿戴」区块 = 原来底栏的「☰ 显示层」开关（按钮已隐藏，逻辑照旧）：
+        # 点区块标题 → 拨动那个开关；开关变化（启动恢复除外）→ 同步区块标题
+        self._layer_section.toggled.connect(self.anim_view._layer_btn.setChecked)
+        self.anim_view.layer_panel_toggled.connect(self._layer_section.set_expanded)
+        panes.addWidget(self.inspector)
+
         panes.setStretchFactor(0, 5)
         panes.setStretchFactor(1, 4)
+        panes.setStretchFactor(2, 0)                  # 拉宽窗口时右栏不跟着变宽，多出来的给 A/B
         right_layout.addWidget(panes, 1)
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 0)
@@ -307,7 +346,13 @@ class MainWindow(QMainWindow):
         saved_splitter = self._settings.value("layout/splitter", None)
         saved_panes = self._settings.value("layout/panes", None)
         splitter.setSizes([int(x) for x in saved_splitter] if saved_splitter else [220, 1060])
-        panes.setSizes([int(x) for x in saved_panes] if saved_panes else [600, 480])
+        # M44.2a：现在是 A | B | 右栏 三段。旧版本只存了 A、B 两段 → 保留用户的 A/B 宽度，右栏用默认宽
+        sizes = [int(x) for x in saved_panes] if saved_panes else []
+        if len(sizes) == 2:
+            sizes.append(INSPECTOR_DEFAULT_WIDTH)
+        if len(sizes) != 3:
+            sizes = [400, 480, INSPECTOR_DEFAULT_WIDTH]   # B 区是看动画的主舞台，默认给宽一点
+        panes.setSizes(sizes)
 
         root.addWidget(splitter, 1)
         self.setCentralWidget(central)
@@ -990,6 +1035,11 @@ class MainWindow(QMainWindow):
         self._settings.setValue("hud/visible", visible)
         self._settings.sync()
 
+    def _on_matrix_section_toggled(self, expanded: bool) -> None:
+        """M44.2a：右栏「方向 × 动作」区块折叠/展开 → 记住（QSettings）。"""
+        self._settings.setValue("inspector/matrix_open", expanded)
+        self._settings.sync()
+
     def _on_layer_panel_toggled(self, visible: bool) -> None:
         """M36.2：显示层面板开关持久化（QSettings）。"""
         self._settings.setValue("display/layer_panel", visible)
@@ -1291,17 +1341,21 @@ class MainWindow(QMainWindow):
         if self._group is not None:
             gname = self._group.display_name or self._group.res_id
             core_n = len(self._render_parts(self._group))
+            # M44.2a 修复：「单部件 / N 层叠合」要按**实际显示**的部件数判断（含 M37 形象组合）。
+            # 以前只看组自己的部件：头发组 501111001 本身 1 个部件，但形象组合又带出 4 个，
+            # 状态栏却写「单部件 · 形象组合 +4 部件」，自相矛盾（实测截图）
+            shown = self._display_parts(self._group)
             if self._group.is_variant:
                 segs.append(f"变体 {gname}（{core_n} 层）")
-            elif core_n <= 1:
+            elif len(shown) <= 1:
                 # M44.1：单部件资源（如 503122 宝箱怪）没有叠层，
                 # 不再显示「1 层叠合 · shadow 最底」这种无意义的信息
                 segs.append(f"组 {gname}（单部件）")
             else:
-                # 只有组里真的有影子部件时才提示「shadow 最底」
-                has_shadow = any(p.part == "shadow" for p in self._render_parts(self._group))
+                # 只有显示的部件里真的有影子时才提示「shadow 最底」
+                has_shadow = any(p.part == "shadow" for p in shown)
                 segs.append(
-                    f"组 {gname}（{core_n} 层叠合"
+                    f"组 {gname}（{len(shown)} 层叠合"
                     + (" · shadow 最底" if has_shadow else "")
                     + "）"
                 )
@@ -1779,20 +1833,25 @@ class MainWindow(QMainWindow):
         self._close_batch_progress()
         self._on_export_failed(reason)
 
-    def closeEvent(self, event) -> None:
-        """关闭时保存布局宽度 + 最近拖入目录 + 选中项 + A区模式到 QSettings。"""
-        # M45：关窗时如果还在导出，先让它停下（不写半截文件）
+    def _shutdown_workers(self) -> None:
+        """停掉所有后台线程：关窗（closeEvent）和程序退出（atexit 兜底）都调用这里。
+
+        - 导出线程：先让它停下，不写半截文件（M45）
+        - A/B 区解码线程：先「请它停」（解码循环每帧都会检查，能尽快结束），再等它真正结束
+        - 空帧抽样线程、文件监听、图集缓存：交给已有的 _stop_all_workers_and_caches
+        可以重复调用：已经停了的线程会直接跳过。
+        """
         if self._export_worker is not None and self._export_worker.isRunning():
             self._export_worker.requestInterruption()
             self._export_worker.wait()
-        # M45 修复：关窗时停掉 A/B 区解码线程和空帧抽样线程。
-        # 以前不停：如果关窗那一刻还在解码（大序列、刚切换资源），程序退出时线程还在跑，
-        # Qt 会报「QThread: Destroyed while thread is still running」并强制崩溃退出。
-        # 先「请它停」（解码循环每帧都会检查，能尽快结束），再等它真正结束。
         for w in (self.grid_view._worker, self.anim_view._worker):
             if w is not None and w.isRunning():
                 w.requestInterruption()
         self._stop_all_workers_and_caches()
+
+    def closeEvent(self, event) -> None:
+        """关闭时保存布局宽度 + 最近拖入目录 + 选中项 + A区模式到 QSettings。"""
+        self._shutdown_workers()      # 停掉所有后台线程（导出、A/B 区解码、空帧抽样）
         self._settings.setValue("layout/splitter", self._splitter.sizes())
         self._settings.setValue("layout/panes", self._panes.sizes())
         if self._last_folder is not None:

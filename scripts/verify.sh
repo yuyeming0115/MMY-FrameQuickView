@@ -57,6 +57,7 @@ QUICK_TESTS=(
   tests/test_m45_batch.py
   tests/test_m45_export.py
   tests/test_m45_compose_render.py
+  tests/test_m44_layout.py
   tests/test_m44_quick_fixes.py
   tests/test_m42_auto_weapon_and_look_split.py
   tests/test_m38_wear_look.py

@@ -324,6 +324,25 @@ for f in tests/test_m8_layout.py tests/test_m32_hud_gui.py tests/test_m34_canvas
 
 ### 阶段 2：布局重排（开 PR）
 
+> 实施拆成三小步，每步单独验证：
+> - **2a 右栏检查器**（2026-11-27 实现；Codex 验证 test_m44_layout 9 项 + 全部测试 41/43 通过（2 个已知遗留），真实窗口截图复核）：新增 `src/ui/inspector.py`（`Inspector` 整列可滚动 + `InspectorSection` 可折叠区块）。
+>   中间区域由 A | B 变成 **A | B | 右栏**（右栏作为 `_panes` 第三段，`_splitter` 仍是 左栏 | 右侧，左栏相关测试不受影响）。
+>   `AnimView.dock_side_panels()` 把按钮矩阵和显示层面板交给右栏：B 区左侧按钮列、底栏「☰ 显示层」按钮隐藏，画布占满 B 区；
+>   不调用该方法时行为与旧版完全一致（test_m35 等直接用 AnimView 的测试不受影响）。
+>   按钮矩阵 `ButtonMatrix.set_horizontal(True)`：方向列、动作列左右并排、顶部对齐。
+>   「显示层 / 穿戴」区块折叠 = 原「显示层」开关（双向同步，仍记 `display/layer_panel`）；单个部件时显示占位提示。
+>   「方向 × 动作」区块折叠记 `inspector/matrix_open`。`layout/panes` 旧版两段 → 保留 A/B、右栏补默认 280。
+>   右栏 `keyPressEvent` 放行方向键（否则滚动区会吃掉 ←→↑↓，主窗口切不了方向/动作）。HUD 本步仍留在画布右下角（阶段 3 并入矩阵）。
+>   测试：新增 `tests/test_m44_layout.py`；`test_m7_layout` 改为直接取 `w.matrix`。
+>   截图复核后补丁：B 区变窄（默认约 410px）底栏文字被截断 →「棋盘格」「HUD」挪到 B 区标题行（标题 | 棋盘格 | HUD | 导出），
+>   播放按钮只留 ▶/⏸ 图标；默认中间三段改为 [400, 480, 280]（B 是主舞台）。
+>   状态栏修复：「单部件 / N 层叠合」改按**实际显示**的部件数（含 M37 形象组合），不再出现「单部件 · 形象组合 +4 部件」。
+>   退出兜底：`MainWindow` 构造时用 `atexit` + `weakref` 注册「退出前停掉所有后台线程」（新增 `_shutdown_workers()`，closeEvent 也改用它）。
+>   起因：14 个测试创建主窗口后不 close()，Python 退出时解码线程偶尔还在跑 → `QThread: Destroyed while thread is still running` 崩溃
+>  （test_m10_left_resize 断言全过但退出码非 0）。在程序里统一兜底，不用逐个改测试。
+> - **2b 胶片条**：A 区网格改为舞台下方胶片条（待做）
+> - **2c 顶栏瘦身 + 舞台标题行 + 缩放**（待做）
+
 - 三栏结构、舞台标题行、胶片条、显示层挪进右栏、顶栏瘦身、空状态拖拽区。
 - 此阶段右栏矩阵位置**先放现有两列按钮**（横向排开），保证功能不缺；阶段 3 再替换。
 - QSettings 迁移（第五节）。
@@ -377,3 +396,4 @@ for f in tests/test_m8_layout.py tests/test_m32_hud_gui.py tests/test_m34_canvas
 | 2026-11-26 | M44.1 阶段 1 小修实现：FPS 滑杆、A 区两段式 + 自适应内容裁剪、字号、播放快捷键、状态栏文案、A 区模式重启恢复 bug；新增 `tests/test_m44_quick_fixes.py` |
 | 2026-11-26 | M44.1 合并入 main（快进合并，commit `8848625`） |
 | 2026-11-26 | M44.2：非模块化角色（怪物/NPC/伙伴纯 ID 整包、翅膀、坐骑、特效）不再显示「穿戴时装/头发/武器」下拉，也不叠残留的穿戴记忆；详见 `M38-穿戴时装头发武器.md` 变更记录 |
+| 2026-11-27 | 阶段 2a 右栏检查器实现（见阶段 2 说明） |

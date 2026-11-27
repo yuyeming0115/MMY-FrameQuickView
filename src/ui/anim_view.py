@@ -364,6 +364,7 @@ class PartToggles(QFrame):
         # M44.1：字号 11 → 13（可读性规范：不再出现 11px）
         title.setStyleSheet("color: #96A1AD; font-size: 13px; letter-spacing: 1px;")
         outer.addWidget(title)
+        self._title_lbl = title       # M44.2a：停靠到右栏时隐藏（右栏区块标题已写「显示层 / 穿戴」）
 
         # M26/M28：穿戴行——全局可穿戴资源库（特效 / 翅膀），任意套装可挑一个穿上。
         # 选完特效可直接 Ctrl+方向键微调偏移，与显示层操作集中在一处。
@@ -595,6 +596,7 @@ class AnimView(QFrame):
         self._export_btn.clicked.connect(self.export_requested)
         header.addWidget(self._export_btn)
         outer.addLayout(header)
+        self._header = header         # M44.2a：底栏放不下的「棋盘格」「HUD」稍后插到这一行（见下方）
 
         # M35：按钮矩阵独立列（不再悬浮遮挡画布）——左 = 矩阵列 | 右 = 画布区
         body = QHBoxLayout()
@@ -644,6 +646,9 @@ class AnimView(QFrame):
         self._toggles = PartToggles(canvas_host)
         self._toggles.hide()
         self._toggles_active = False   # M36.2：是否处于组视图（面板数据已就绪）
+        # M44.2a：按钮矩阵和显示层是否已移到右栏检查器（见 dock_side_panels）
+        self._docked = False
+        self._dock_placeholder: QLabel | None = None
 
         # M32：HUD 信息面板（帧数账目），悬浮于右下角；
         # M32.1 紧凑/悬停展开高度变化 → 重新锚定右下角
@@ -658,7 +663,9 @@ class AnimView(QFrame):
         bar = QHBoxLayout()
         bar.setSpacing(8)
 
-        self._play_btn = QPushButton("▶ 播放")
+        # M44.2a：只留图标（▶ = 播放，⏸ = 暂停），固定宽度。文字版「⏸ 暂停」在窄 B 区里会被截成「暂(」
+        self._play_btn = QPushButton("▶")
+        self._play_btn.setFixedWidth(44)
         self._play_btn.setCheckable(True)
         self._play_btn.clicked.connect(self._toggle_play)
         self._play_btn.setToolTip("播放 / 暂停（快捷键：空格）")
@@ -703,7 +710,10 @@ class AnimView(QFrame):
         self._checker_chk.setChecked(False)
         self._checker_chk.setStyleSheet("color: #96A1AD;")
         self._checker_chk.toggled.connect(self._canvas.set_checker)
-        bar.addWidget(self._checker_chk)
+        # M44.2a：按钮矩阵移到右栏后 B 区变窄（默认约 410px），底栏放不下全部控件，
+        # 按钮文字被截断（实测截图「暂停」「棋盘格」「HUD」都只剩半截）。
+        # 「棋盘格」「HUD」是只影响画布显示的开关，挪到 B 区标题行（M44 规划里舞台标题行就放这类开关）
+        self._header.insertWidget(1, self._checker_chk)
 
         # M32：HUD 信息面板开关（默认开，QSettings 持久化由上层接管）
         self._hud_btn = QPushButton("📊 HUD")
@@ -718,7 +728,7 @@ class AnimView(QFrame):
             "QPushButton:checked { color: #D4AF37; border-color: #D4AF37; }"
         )
         self._hud_btn.toggled.connect(self._on_hud_toggled)
-        bar.addWidget(self._hud_btn)
+        self._header.insertWidget(2, self._hud_btn)       # 标题行：标题 | 棋盘格 | HUD | 导出
 
         # M36.2：显示层面板开关（组视图右上角的部件显隐/穿戴面板；默认开，上层持久化）
         self._layer_btn = QPushButton("☰ 显示层")
@@ -785,6 +795,37 @@ class AnimView(QFrame):
             old.setParent(None)
         self._matrix_scroll.setWidget(widget)
 
+    def dock_side_panels(self) -> tuple[QWidget | None, "PartToggles", QLabel]:
+        """M44 阶段 2a：把按钮矩阵和显示层面板交出来，放到右栏检查器里。
+
+        返回 (按钮矩阵, 显示层面板, 占位提示)，由主窗口放进右栏。之后：
+        - B 区左边的按钮列隐藏，画布占满整个 B 区
+        - 显示层面板不再浮在画布右上角，跟着右栏的布局走（只算高度，不再挪位置）
+        - 底栏「☰ 显示层」按钮隐藏（右栏区块标题负责展开/折叠），但开关逻辑照旧，
+          设置记忆 display/layer_panel 和相关测试都不受影响
+        - 单部件资源 / 未选中时，显示层位置显示一行占位提示，而不是一片空白
+        不调用这个方法时，行为和以前完全一样。
+        """
+        self._docked = True
+        matrix = self._matrix_scroll.takeWidget()     # 按钮矩阵直接放右栏，不再套一层内部滚动区
+        self._matrix_container.hide()
+        self._layer_btn.hide()
+        tog = self._toggles
+        tog.setParent(None)                           # 交给右栏；右栏 addWidget 时会重新设置父控件
+        tog._title_lbl.hide()
+        tog.setMinimumWidth(0)
+        tog.setMaximumWidth(16777215)                 # 取消浮动时 setFixedSize 留下的固定宽度
+        # 下拉框按内容自动撑宽会把右栏撑出横向滚动，改成「最少显示 8 个字、多余的省略」
+        for combo in (tog._fx_combo, tog._wing_combo, tog._body_combo,
+                      tog._hair_combo, tog._weapon_combo):
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(8)
+        self._dock_placeholder = QLabel("当前选中的是单个部件，没有可开关的叠层。\n（在左栏点组头，可看叠层和穿戴效果）")
+        self._dock_placeholder.setWordWrap(True)
+        self._dock_placeholder.setStyleSheet("color: #7A828C; font-size: 13px; padding: 2px 0;")
+        self._dock_placeholder.setVisible(not self._toggles_active)
+        return matrix, tog, self._dock_placeholder
+
     def set_dir_overlay_enabled(self, enabled: bool) -> None:
         """「显向」toggle：开 = 画布响应 hover/拖拽方向热区；关 = 画布完全透明。"""
         self._canvas.set_dir_overlay_enabled(enabled)
@@ -800,6 +841,8 @@ class AnimView(QFrame):
     def show_part_toggles(self, parts: dict[str, str], hidden: set[str]) -> None:
         """组视图：显示右侧逐部件显隐 toggle。parts = {part 名: 中文名}。"""
         self._toggles_active = True
+        if self._dock_placeholder is not None:
+            self._dock_placeholder.hide()
         self._toggles.set_parts(parts, hidden)
         # M36.2：面板开关关闭时保持隐藏（数据已就绪，打开开关即显示）
         if self._layer_btn.isChecked():
@@ -810,6 +853,8 @@ class AnimView(QFrame):
         """单部件视图/无选中：隐藏右侧 toggle 列表。"""
         self._toggles_active = False
         self._toggles.hide()
+        if self._dock_placeholder is not None:
+            self._dock_placeholder.show()
 
     def set_layer_panel_visible(self, visible: bool) -> None:
         """M36.2：启动恢复显示层面板开关（不重复发信号）。"""
@@ -934,6 +979,11 @@ class AnimView(QFrame):
     def _reposition_toggles(self) -> None:
         """显示层靠右上角；高度超出宿主时限制并交由内部滚动。"""
         host, tog = self._stack_host, self._toggles
+        if self._docked:
+            # M44.2a：已在右栏里——宽度跟右栏，高度按内容算（右栏整列会滚动，不需要限高）
+            if tog._items or tog.wear_selector_count:
+                tog.setFixedHeight(tog.content_height())
+            return
         btns = [b for _, b in tog._items]
         n = len(btns)
         if n:
@@ -1030,7 +1080,7 @@ class AnimView(QFrame):
             self._canvas.set_frame(None)
             self._canvas.set_blank_hint(False)
             self._play_btn.setChecked(False)
-            self._play_btn.setText("▶ 播放")
+            self._play_btn.setText("▶")
             self._timer.stop()
             self._title.setText("B · GIF 动画预览（无帧）")
             return
@@ -1136,7 +1186,7 @@ class AnimView(QFrame):
         self._index = 0
         self._canvas.set_frame(self._frames[0])
         self._play_btn.setChecked(True)
-        self._play_btn.setText("⏸ 暂停")
+        self._play_btn.setText("⏸")
         self._timer.start()
 
     def _toggle_play(self, checked: bool) -> None:
@@ -1145,15 +1195,15 @@ class AnimView(QFrame):
             return
         if checked:
             self._timer.start()
-            self._play_btn.setText("⏸ 暂停")
+            self._play_btn.setText("⏸")
         else:
             self._timer.stop()
-            self._play_btn.setText("▶ 播放")
+            self._play_btn.setText("▶")
 
     def _pause(self) -> None:
         self._play_btn.setChecked(False)
         self._timer.stop()
-        self._play_btn.setText("▶ 播放")
+        self._play_btn.setText("▶")
 
     def _advance(self) -> None:
         if not self._frames:

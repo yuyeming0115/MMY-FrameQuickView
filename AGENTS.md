@@ -186,6 +186,7 @@ MMY-FrameQuickView/
 │       ├── button_matrix.py   # 方向/动作按钮组（含缺失状态标记、扁平特效虚拟方向）
 │       ├── flow_layout.py     # 流式换行布局（分类 chips 行）
 │       ├── grid_view.py       # 序列帧网格显示区（A区）
+│       ├── inspector.py       # M44.2a：右栏检查器（方向×动作按钮、显示层/穿戴，可折叠区块）
 │       └── anim_view.py       # GIF动画播放区（B区）
 ├── templates/
 │   └── default.json
